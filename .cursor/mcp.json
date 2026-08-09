@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "nominatim": {
+      "command": "node",
+      "args": ["MCP/Code/build/index.js"]
+    },
+    "weather": {
+      "command": "node",
+      "args": ["MCP/Code2_calculator/build/index.js"]
+    }
+  }
+}
