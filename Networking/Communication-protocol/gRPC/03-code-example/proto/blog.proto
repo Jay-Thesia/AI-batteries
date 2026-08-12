@@ -1,0 +1,46 @@
+syntax = "proto3";
+
+package blog.v1;
+
+// BlogService is the public gRPC contract for this learning demo.
+service BlogService {
+  rpc GetUser (GetUserRequest) returns (User);
+  rpc ListUsers (ListUsersRequest) returns (ListUsersResponse);
+  rpc ListPostsByUser (ListPostsByUserRequest) returns (ListPostsByUserResponse);
+  rpc CreatePost (CreatePostRequest) returns (Post);
+}
+
+message User {
+  string id = 1;
+  string name = 2;
+  string email = 3;
+}
+
+message Post {
+  string id = 1;
+  string title = 2;
+  string author_id = 3;
+}
+
+message GetUserRequest {
+  string id = 1;
+}
+
+message ListUsersRequest {}
+
+message ListUsersResponse {
+  repeated User users = 1;
+}
+
+message ListPostsByUserRequest {
+  string user_id = 1;
+}
+
+message ListPostsByUserResponse {
+  repeated Post posts = 1;
+}
+
+message CreatePostRequest {
+  string title = 1;
+  string author_id = 2;
+}
