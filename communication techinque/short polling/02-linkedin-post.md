@@ -1,43 +1,41 @@
-# LinkedIn Post — GraphQL
+# LinkedIn Post — Short Polling
 
 ---
 
 ## Ready-to-post version
 
-Spent some time revisiting GraphQL fundamentals today — not the tooling, the contract model.
+Spent some time revisiting short polling — not as a joke, as a delivery contract.
 
-Most teams don’t struggle with GraphQL syntax. They struggle with the shift in thinking:
+Most teams don’t struggle with `setInterval`. They struggle with the shift in thinking:
 
-REST asks: “Which endpoint owns this resource?”  
-GraphQL asks: “What graph of data does this screen need?”
+A poll is not “refresh the page.”  
+A poll is “give me the delta since my cursor, and answer **now**, even if the delta is empty.”
 
-That single change explains most of the design decisions:
+That single rule explains the design:
 
-• Schema becomes the product contract, not an afterthought  
-• Clients select fields intentionally instead of accepting over-fetching  
-• Resolvers turn the graph into executable boundaries over existing data sources  
-• Query shape mirroring response shape is not convenience — it’s the mental model
+• Empty HTTP 200s are the common case, not a bug  
+• Perceived latency is dominated by the interval, not the network  
+• QPS ≈ clients / interval — most of it is “no news”  
+• Overlapping timers are worse than a slightly slower loop  
 
-GraphQL is not a replacement for REST by default. It’s a stronger fit when multiple clients need different slices of the same domain graph, and when frontend iteration speed matters more than URL-level simplicity.
+Short polling is not obsolete. It’s a stronger fit when a few seconds of delay is acceptable, events are rare, and you want stateless HTTP you already know how to operate.
 
-If you’re adopting it: design the schema around domain meaning first. Tooling second. Clever queries last.
+If you’re using it: cursor first. Interval second. “Real-time” branding last.
 
-#GraphQL #APIDesign #BackendEngineering #SoftwareArchitecture
+#SystemDesign #BackendEngineering #HTTP #SoftwareArchitecture
 
 ---
 
-
-
 ## Optional shorter version
 
-Revisiting GraphQL with a stricter lens:
+Revisiting short polling with a stricter lens:
 
-It’s less about “one endpoint” and more about making the data graph explicit.
+It’s less about “keep calling the API” and more about bounded delay.
 
-Schema = contract  
-Resolvers = execution boundaries  
-Client   = intentional field selection
+Timer = clock  
+Cursor = resume point  
+Empty 200 = success with no news
 
-Use it when your product has many consumers asking for different shapes of the same domain. Otherwise REST is still a clean answer.
+Use it when late-by-seconds is still correct. When it isn’t, you wanted a held request or a socket.
 
-#GraphQL #APIDesign
+#SystemDesign #HTTP

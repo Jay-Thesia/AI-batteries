@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Long polling inbox</title>
+    <style>
+      :root {
+        color-scheme: light;
+        font-family: ui-sans-serif, system-ui, sans-serif;
+      }
+      body {
+        max-width: 42rem;
+        margin: 2rem auto;
+        padding: 0 1rem;
+        line-height: 1.45;
+      }
+      h1 { font-size: 1.4rem; }
+      .muted { color: #555; font-size: 0.95rem; }
+      .stats {
+        display: flex;
+        gap: 1rem;
+        flex-wrap: wrap;
+        margin: 1rem 0;
+      }
+      .stat {
+        background: #f3f4f6;
+        padding: 0.6rem 0.8rem;
+        border-radius: 8px;
+      }
+      form { display: flex; gap: 0.5rem; margin: 1rem 0; }
+      input, button { font: inherit; padding: 0.45rem 0.6rem; }
+      input { flex: 1; }
+      ul { padding-left: 1.2rem; }
+      li { margin: 0.35rem 0; }
+      .waiting { color: #1d4ed8; }
+    </style>
+  </head>
+  <body>
+    <h1>Long polling inbox</h1>
+    <p class="muted">
+      The browser opens <code>GET /messages/wait?after=…</code> and <strong>leaves it hanging</strong>.
+      Post a message (or wait for the timeout) and the request completes. Then it immediately opens the next wait — no client sleep.
+    </p>
+
+    <div class="stats">
+      <div class="stat">Waits finished: <strong id="waits">0</strong></div>
+      <div class="stat">Timeouts: <strong id="timeouts">0</strong></div>
+      <div class="stat">Hits with data: <strong id="hits">0</strong></div>
+      <div class="stat">Status: <strong id="status" class="waiting">waiting…</strong></div>
+    </div>
+
+    <form id="form">
+      <input id="author" placeholder="Your name" value="Ada" />
+      <input id="text" placeholder="Write a message" required />
+      <button type="submit">Post</button>
+    </form>
+
+    <h2>Messages</h2>
+    <ul id="list"></ul>
+
+    <script>
+      let after = "";
+      let waits = 0;
+      let timeouts = 0;
+      let hits = 0;
+      const seen = new Set();
+
+      const $ = (id) => document.getElementById(id);
+
+      function renderMessage(message) {
+        if (seen.has(message.id)) return;
+        seen.add(message.id);
+        const li = document.createElement("li");
+        li.textContent = `${message.author}: ${message.text}  (#${message.id})`;
+        $("list").appendChild(li);
+      }
+
+      async function waitOnce() {
+        $("status").textContent = "waiting…";
+        $("status").className = "waiting";
+
+        const url = after
+          ? `/messages/wait?after=${encodeURIComponent(after)}`
+          : "/messages/wait";
+        const res = await fetch(url);
+        const body = await res.json();
+
+        waits += 1;
+        $("waits").textContent = String(waits);
+
+        if (body.messages.length) {
+          hits += 1;
+          $("hits").textContent = String(hits);
+          $("status").textContent = "got news";
+          $("status").className = "";
+          body.messages.forEach(renderMessage);
+        } else {
+          timeouts += 1;
+          $("timeouts").textContent = String(timeouts);
+          $("status").textContent = "timeout — retrying";
+          $("status").className = "";
+        }
+
+        after = body.latestId || after;
+      }
+
+      async function loop() {
+        try {
+          await waitOnce();
+        } catch (error) {
+          console.error(error);
+          $("status").textContent = "error — retrying";
+          await new Promise((resolve) => setTimeout(resolve, 500));
+        }
+        loop();
+      }
+
+      $("form").addEventListener("submit", async (event) => {
+        event.preventDefault();
+        await fetch("/messages", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            author: $("author").value,
+            text: $("text").value,
+          }),
+        });
+        $("text").value = "";
+      });
+
+      loop();
+    </script>
+  </body>
+</html>

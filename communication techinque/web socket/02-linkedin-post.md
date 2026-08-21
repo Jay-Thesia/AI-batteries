@@ -1,43 +1,41 @@
-# LinkedIn Post — GraphQL
+# LinkedIn Post — WebSockets
 
 ---
 
 ## Ready-to-post version
 
-Spent some time revisiting GraphQL fundamentals today — not the tooling, the contract model.
+Spent some time revisiting WebSockets — not the libraries, the transport model.
 
-Most teams don’t struggle with GraphQL syntax. They struggle with the shift in thinking:
+Most teams don’t struggle with `new WebSocket(url)`. They struggle with the shift in thinking:
 
-REST asks: “Which endpoint owns this resource?”  
-GraphQL asks: “What graph of data does this screen need?”
+HTTP asks: “One request, one response, then we can hang up.”  
+WebSockets ask: “Upgrade once, then both sides speak in frames whenever they need to.”
 
-That single change explains most of the design decisions:
+That single change explains the real work:
 
-• Schema becomes the product contract, not an afterthought  
-• Clients select fields intentionally instead of accepting over-fetching  
-• Resolvers turn the graph into executable boundaries over existing data sources  
-• Query shape mirroring response shape is not convenience — it’s the mental model
+• You still need a message protocol (`type`, `id`, errors) — the socket does not give you an API  
+• The server now holds connection state: registry, heartbeats, cleanup on close  
+• Reconnect without a cursor is silent data loss  
+• Fan-out across multiple nodes still needs a pub/sub  
 
-GraphQL is not a replacement for REST by default. It’s a stronger fit when multiple clients need different slices of the same domain graph, and when frontend iteration speed matters more than URL-level simplicity.
+WebSockets are not a REST replacement. They’re a stronger fit when both sides chatter, latency matters, and you are willing to operate long-lived connections.
 
-If you’re adopting it: design the schema around domain meaning first. Tooling second. Clever queries last.
+If you’re adopting them: design the frame contract first. Heartbeats second. Framework last.
 
-#GraphQL #APIDesign #BackendEngineering #SoftwareArchitecture
+#WebSockets #SystemDesign #BackendEngineering #SoftwareArchitecture
 
 ---
 
-
-
 ## Optional shorter version
 
-Revisiting GraphQL with a stricter lens:
+Revisiting WebSockets with a stricter lens:
 
-It’s less about “one endpoint” and more about making the data graph explicit.
+It’s less about “real-time” and more about a duplex pipe.
 
-Schema = contract  
-Resolvers = execution boundaries  
-Client   = intentional field selection
+Handshake = HTTP upgrade  
+Frames = your protocol  
+Reconnect = catch up from a cursor
 
-Use it when your product has many consumers asking for different shapes of the same domain. Otherwise REST is still a clean answer.
+Use it when both sides talk often. If the client only asks every 30s, polling is still the honest design.
 
-#GraphQL #APIDesign
+#WebSockets #SystemDesign

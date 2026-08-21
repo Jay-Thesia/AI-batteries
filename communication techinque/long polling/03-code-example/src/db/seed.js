@@ -4,16 +4,10 @@ import { store } from "./store.js";
  * Seed data for local development / learning.
  */
 export function seedDatabase() {
-  store.users = [
-    { id: "1", name: "Ada", email: "ada@example.com" },
-    { id: "2", name: "Grace", email: "grace@example.com" },
+  store.messages = [
+    { id: "101", author: "Ada", text: "Inbox is live.", createdAt: "2026-01-01T10:00:00.000Z" },
+    { id: "102", author: "Grace", text: "Hold the GET until I write.", createdAt: "2026-01-01T10:00:05.000Z" },
   ];
 
-  store.posts = [
-    { id: "101", title: "Hello GraphQL", authorId: "1" },
-    { id: "102", title: "Schema first thinking", authorId: "1" },
-    { id: "103", title: "Queries are wishlists", authorId: "2" },
-  ];
-
-  store.sequences.postId = 103;
+  store.sequences.messageId = 102;
 }

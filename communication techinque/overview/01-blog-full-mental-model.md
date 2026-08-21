@@ -1,342 +1,307 @@
-# GraphQL Blog — Full Mental Model
+# Communication Techniques — Full Mental Model
 
-> Goal: after reading this, you should be able to *think* in GraphQL, not just copy queries.
+> Goal: after reading this, you should be able to *pick* a delivery pattern on purpose, not mix it up with REST or GraphQL.
 
 ---
 
-## 1. What problem does GraphQL solve?
+## 1. What problem do communication techniques solve?
 
-Apps need data from servers.
+Apps need **fresh data**.
 
-**REST** usually means many endpoints:
-- `GET /users/1`
-- `GET /users/1/posts`
-- `GET /posts/5/comments`
+A chat message arrives. A stock ticks. A job finishes. Someone else liked a post.
 
-Problems that show up often:
-1. **Over-fetching** — you get more fields than you need
-2. **Under-fetching** — one call is not enough, so you make more calls
-3. **Endpoint sprawl** — every new screen wants a slightly different shape of data
-4. **Frontend ↔ backend coupling** — UI changes often need new endpoints
+The server already knows. The client does not — until something **moves bytes**.
 
-**GraphQL** is a different contract:
-- One endpoint (usually `/graphql`)
-- Client sends a **query** describing the exact data shape
-- Server returns JSON matching that shape
+**API contracts** (REST, GraphQL, gRPC) answer:
 
-Mental shift:
+- What is the shape of the data?
+- Which resource / procedure / field am I talking about?
 
-| REST thinking | GraphQL thinking |
-|---|---|
-| “Which URL do I call?” | “What graph of data do I need?” |
-| Resources + endpoints | Types + fields + relationships |
-| Multiple round trips | One query, nested data |
-| Fixed response shape | Client-chosen response shape |
+**Communication techniques** answer a different question:
+
+> How does the client learn that something changed — without wasting work, and without being late?
+
+That is a **timing and transport** problem, not a schema problem.
+
+You can poll a REST endpoint. You can long-poll a GraphQL query. You can stream gRPC. You can put JSON over a WebSocket. The contract and the delivery pattern are independent knobs.
 
 ---
 
 ## 2. Core mental model (keep this forever)
 
-Think of your backend data as a **graph**:
+Every live feature is a loop:
 
 ```
-User
- ├── id
- ├── name
- ├── email
- └── posts[]
-      ├── id
-      ├── title
-      └── comments[]
-           ├── id
-           └── text
+Something happens on the server
+        │
+        ▼
+Client somehow finds out
+        │
+        ▼
+UI updates
 ```
 
-GraphQL lets the client walk this graph and pick fields.
+The techniques differ only in **who waits**, **who speaks first**, and **whether the connection dies after each answer**.
 
-A query is basically:
+| Technique | Who asks? | Connection lifetime | Typical latency | Waste |
+|---|---|---|---|---|
+| Short polling | Client, on a timer | One HTTP request per tick | Up to your interval | High (empty answers) |
+| Long polling | Client, then waits | One HTTP request held open | Near-instant when data exists | Medium (reconnects) |
+| WebSocket | Either side, anytime | One long-lived TCP/TLS socket | Near-instant both ways | Low (after handshake) |
+| SSE (cousin) | Server pushes | One long-lived HTTP response | Near-instant server → client | Low (one direction) |
 
-> “Start at this entry point, then follow these relationships, and return only these fields.”
+A request is basically:
+
+> “I need updates. Should I keep knocking, camp at the door, or install an intercom?”
 
 That is the whole idea.
 
 ---
 
-## 3. The three operations
+## 3. Protocol vs technique (do not mix these)
 
-### 1) Query — read data
-Like GET, but with a custom shape.
+This repo already has **communication protocols**:
 
-```graphql
-query {
-  user(id: "1") {
-    name
-    posts {
-      title
-    }
-  }
-}
+- REST — resources + HTTP verbs
+- GraphQL — client-chosen graph + one schema
+- gRPC — RPC + Protobuf + HTTP/2
+
+Those are **what you say**.
+
+This folder is **how often you say it**, and **whether the pipe stays open**.
+
+```text
+┌─────────────────────────────────────┐
+│           Your product UI           │
+└──────────────────┬──────────────────┘
+                   │
+     ┌─────────────┴─────────────┐
+     │  Communication technique  │  ← this pack
+     │  poll / long-poll / WS    │
+     └─────────────┬─────────────┘
+                   │
+     ┌─────────────┴─────────────┐
+     │   Communication protocol  │  ← Networking/ folder
+     │   REST / GraphQL / gRPC   │
+     └─────────────┬─────────────┘
+                   │
+              TCP / TLS / HTTP
 ```
 
-### 2) Mutation — change data
-Like POST/PUT/PATCH/DELETE.
+Mixing them up is the #1 beginner mistake:
 
-```graphql
-mutation {
-  createPost(title: "Hello", authorId: "1") {
-    id
-    title
-  }
-}
-```
-
-### 3) Subscription — live updates
-Server pushes changes (often over WebSockets).
-
-```graphql
-subscription {
-  messageAdded {
-    id
-    text
-  }
-}
-```
-
-Remember:
-- **Query** = ask
-- **Mutation** = change
-- **Subscription** = listen
+- “We use GraphQL, so we don’t need WebSockets” — false (GraphQL subscriptions often *are* WebSockets)
+- “We use REST, so we can only poll” — false (REST + SSE, REST + WS, REST + long poll all exist)
+- “WebSocket is an API style like REST” — false (it’s a transport; you still invent a message protocol on top)
 
 ---
 
-## 4. Schema = the contract
+## 4. The four delivery patterns
 
-The **schema** is the source of truth. It defines:
-- what types exist
-- what fields each type has
-- what arguments fields accept
-- what clients are allowed to ask
+### 1) Short polling — “ask again soon”
 
-Example schema (SDL = Schema Definition Language):
+Client:
 
-```graphql
-type User {
-  id: ID!
-  name: String!
-  email: String
-  posts: [Post!]!
-}
-
-type Post {
-  id: ID!
-  title: String!
-  author: User!
-}
-
-type Query {
-  user(id: ID!): User
-  posts: [Post!]!
-}
-
-type Mutation {
-  createPost(title: String!, authorId: ID!): Post!
-}
+```
+every 2 seconds:
+  GET /messages?after=103
+  → { "messages": [] }     // usually empty
 ```
 
-Symbols to memorize:
-- `String`, `Int`, `Float`, `Boolean`, `ID` → scalar types
-- `Type!` → non-null (must return a value)
-- `[Type]` → list
-- `[Type!]!` → list itself required, and items required
+Server answers **immediately**, even if nothing changed.
 
-Mental model:
-> If it’s not in the schema, the client cannot ask for it.
+Good when:
+- Updates are rare and delay of a few seconds is fine
+- You must stay on boring HTTP (proxies, caches, simple hosts)
+- Implementation simplicity beats efficiency
+
+Pain:
+- Empty responses dominate
+- Interval is a lie: too short = load; too long = stale UI
+
+### 2) Long polling — “I’ll wait for the answer”
+
+Client:
+
+```
+GET /messages/wait?after=103
+  ... connection stays open ...
+  → { "messages": [ { "id": "104", "text": "hi" } ] }
+immediately open the next wait
+```
+
+Server **holds** the request until:
+
+- new data exists, or
+- a timeout fires (then client retries)
+
+Good when:
+- You want push-like latency on plain HTTP
+- Environments fight WebSockets (old proxies, some corporate networks)
+- Event rate is low-to-medium
+
+Pain:
+- One held request per client = memory + file descriptors
+- Must handle timeouts, disconnects, and “resume from last id”
+- Still request/response — not a true duplex channel
+
+### 3) WebSocket — “keep a two-way pipe”
+
+Client and server upgrade HTTP once, then send frames whenever they want:
+
+```
+Client → { "type": "send", "text": "hi" }
+Server → { "type": "message", "id": "104", "text": "hi" }
+Server → { "type": "message", "id": "105", "text": "yo" }
+```
+
+Good when:
+- Chat, multiplayer, collaborative cursors, live dashboards
+- Client must **send** as often as it **receives**
+- You care about per-message overhead after connect
+
+Pain:
+- You now own connection state, heartbeats, reconnect, backpressure
+- Load balancers and sticky sessions get involved
+- You must design a **message protocol** (types, ids, errors) yourself
+
+### 4) SSE — the one-way cousin (know it exists)
+
+**Server-Sent Events**: one HTTP response that never really ends. Server writes `data: ...\n\n` whenever it wants. Browser `EventSource` reconnects for you.
+
+Good for: live feeds, notifications, stock tickers — **server → client only**.
+
+If the client must talk back a lot, WebSocket usually wins. If you only need a firehose down, SSE is simpler than WS.
 
 ---
 
-## 5. Resolvers = how fields get values
+## 5. How a request actually travels (same inbox, three pipes)
 
-A query asks for fields.  
-A **resolver** is the function that fetches/computes each field.
+Imagine one in-memory inbox. Three clients watch it.
 
-Simple picture:
+**Short poll**
 
 ```
-Client query
-   ↓
-GraphQL engine checks schema
-   ↓
-Calls resolvers field by field
-   ↓
-Builds response object matching the query
+Client timer ──GET /messages?after=N──► Server
+Client         ◄──[] immediately────── Server
+(repeat)
 ```
 
-Example:
+**Long poll**
 
-```js
-const resolvers = {
-  Query: {
-    user: (_, { id }) => db.users.find(id),
-  },
-  User: {
-    posts: (user) => db.posts.byUser(user.id),
-  },
-};
+```
+Client ──GET /messages/wait?after=N──► Server (holds)
+   ... someone POSTs a message ...
+Client ◄──[new messages]──────────── Server
+Client ──GET /messages/wait?after=N'─► Server (holds again)
 ```
 
-Important insight:
-- Parent resolver returns an object
-- Child resolvers can use that parent object
-- Nested queries = nested resolver calls
+**WebSocket**
 
-So GraphQL is not magic storage.  
-It is a **query language + execution engine** over your existing data (DB, APIs, services).
+```
+Client ── HTTP Upgrade ──► Server
+Client ◄► frames forever ◄► Server
+POST /messages (or a WS send) fans out to every socket
+```
+
+Notice: the **domain** is identical (`messages` + `after` cursor). Only the **waiting strategy** changes. That is the comparison you should feel in the code example.
 
 ---
 
-## 6. One request, nested response
+## 6. Cursors, not “give me everything”
 
-Request:
+Live APIs need a **resume token**. In this pack it is `after=<messageId>`.
 
-```graphql
-{
-  user(id: "1") {
-    name
-    posts {
-      title
-    }
-  }
-}
-```
+Without a cursor:
 
-Response:
+- Polls re-download the whole list
+- A reconnect misses events or duplicates them
+- You cannot prove “I am caught up”
 
-```json
-{
-  "data": {
-    "user": {
-      "name": "Ada",
-      "posts": [
-        { "title": "GraphQL basics" },
-        { "title": "Why schemas matter" }
-      ]
-    }
-  }
-}
-```
+With a cursor:
 
-Notice:
-- Query shape ≈ response shape
-- That mirroring is a huge part of the mental model
+1. Client stores the last id it applied
+2. Every request/frame means “anything **newer than this**”
+3. Server returns only the delta
+
+This idea is bigger than polling. Kafka offsets, Slack `oldest`, GraphQL subscriptions with `lastEventId` — same mental model.
 
 ---
 
-## 7. How a GraphQL request actually travels
+## 7. Load: the honest numbers
 
-Typical HTTP flow:
+1000 clients, 1 new message per 10 seconds.
 
-1. Client sends `POST /graphql`
-2. Body contains:
-   - `query` (the GraphQL document)
-   - `variables` (optional dynamic values)
-   - `operationName` (optional, if multiple ops in one document)
-3. Server:
-   - parses query
-   - validates against schema
-   - executes resolvers
-   - returns `{ data, errors? }`
+| Technique | Requests / 10s (order of magnitude) | Held connections |
+|---|---|---|
+| Short poll every 2s | ~5000 mostly-empty GETs | 0 extra |
+| Long poll | ~1000 waits + ~1000 replies | ~1000 |
+| WebSocket | ~1000 frames out | ~1000 sockets |
 
-Example with variables (best practice):
+Short polling **taxes the CPU and network** with empty work.  
+Long polling and WebSockets **tax RAM and connection tables**.
 
-```graphql
-query GetUser($id: ID!) {
-  user(id: $id) {
-    name
-  }
-}
-```
+Pick the tax you can afford.
 
-```json
-{
-  "query": "query GetUser($id: ID!) { user(id: $id) { name } }",
-  "variables": { "id": "1" }
-}
-```
-
-Why variables?
-- Safer than string concatenation
-- Reusable queries
-- Better caching / tooling
+Also: proxies timeout idle HTTP. Long poll timeouts (~20–30s) exist so a proxy does not kill you first. WebSockets need **heartbeats** (ping/pong) for the same reason.
 
 ---
 
-## 8. Errors mental model
+## 8. Errors and reconnects
 
-In REST, errors often mean HTTP 404/500 and maybe no useful body.
+HTTP techniques fail like HTTP: 4xx/5xx, retry with backoff, resume from cursor.
 
-In GraphQL:
-- HTTP may still be `200`
-- Business/field errors often live in `errors` array
-- Partial data is possible (`data` + `errors` together)
+WebSockets fail like connections: drop, TCP reset, phone sleeps. You must:
 
-Example:
+1. Detect death (pong timeout)
+2. Reconnect with backoff
+3. Replay from last cursor (often via a normal HTTP GET, then resume WS)
 
-```json
-{
-  "data": {
-    "user": {
-      "name": "Ada",
-      "email": null
-    }
-  },
-  "errors": [
-    {
-      "message": "Not authorized to view email",
-      "path": ["user", "email"]
-    }
-  ]
-}
-```
+> Delivery technique does not remove failure. It changes *which* failure you design for.
 
-Mental model:
-> GraphQL separates transport success from field resolution success.
+A 200 with `{ messages: [] }` on a short poll is **success with no news**.  
+A long-poll timeout with `{ messages: [] }` is also success — “still nothing, ask again.”  
+A closed WebSocket is **not** success — the pipe is gone.
 
 ---
 
-## 9. GraphQL vs REST (honest comparison)
+## 9. How to choose (honest comparison)
 
-### GraphQL shines when:
-- UI needs flexible, nested data
-- Mobile bandwidth matters (ask only needed fields)
-- Many clients want different shapes from one API
-- Rapid frontend iteration
+### Short polling shines when:
+- Staleness of 2–30s is acceptable
+- Event rate is low
+- You want the dumbest possible client
+- Infra forbids long-lived connections
 
-### REST can be better when:
-- Simple CRUD resources
-- Strong HTTP caching with URLs is enough
-- Team already has mature REST platform
-- File uploads / streaming patterns are simpler in classic HTTP
+### Long polling shines when:
+- You want near-real-time on HTTP/1
+- Bidirectional chatter is rare (client mostly listens)
+- You cannot or will not run WebSockets yet
 
-Not religion. Choose per product constraints.
+### WebSocket shines when:
+- Both sides talk often
+- Latency must be small
+- Message rate would melt a poller
+- You are willing to operate connections
+
+### Still use a normal request when:
+- The user clicked “Save”
+- You need a request/response with a clear status code
+- You do not need a live subscription at all
+
+A good product often **mixes**: REST mutations + WebSocket notifications, or GraphQL queries + SSE for live fields.
 
 ---
 
-## 10. Common pitfalls (learn these early)
+## 10. Common mistakes
 
-1. **N+1 problem**  
-   Nested lists can trigger many DB calls. Fix with batching/dataloader patterns.
-
-2. **Giant queries**  
-   Clients can ask for huge nested trees. Add query depth/complexity limits.
-
-3. **Auth mistakes**  
-   Protect fields/resolvers, not only the endpoint.
-
-4. **Thinking GraphQL replaces your DB**  
-   It doesn’t. It sits above your data sources.
-
-5. **Ignoring schema design**  
-   Bad schema = painful API forever. Design types around domain meaning, not random UI screens.
+1. **Polling without a cursor** — re-fetching the world every tick  
+2. **Polling too fast** — treating “real-time” as `setInterval(50)`  
+3. **Long poll without timeout** — ghost connections until the proxy murders them  
+4. **WebSocket as a replacement for HTTP** — file uploads, auth handshakes, and cacheable GETs still love HTTP  
+5. **No backpressure** — producer faster than UI / DB; memory blows up  
+6. **Forgetting multiple tabs** — 5 tabs × poll = 5× load unless you share a lock or a shared worker  
+7. **Confusing this with GraphQL** — GraphQL subscriptions are a *contract* that often *uses* WebSockets underneath
 
 ---
 
@@ -346,49 +311,52 @@ Not religion. Choose per product constraints.
           ┌──────────────┐
           │   Client UI  │
           └──────┬───────┘
-                 │  query / mutation
+                 │
+     ┌───────────┼───────────┐
+     ▼           ▼           ▼
+ Short poll   Long poll    WebSocket
+ (timer HTTP) (held HTTP)  (duplex pipe)
+     │           │           │
+     └───────────┼───────────┘
                  ▼
           ┌──────────────┐
-          │ GraphQL API  │  ← schema (contract)
-          │  (1 endpoint)│
+          │ Message API  │  ← same domain / same cursor
           └──────┬───────┘
-                 │ resolvers
-        ┌────────┼────────┐
-        ▼        ▼        ▼
-      Database  REST     Services
+                 ▼
+            In-memory inbox
 ```
 
-Your job when learning GraphQL:
-1. Understand the **graph**
-2. Read/write the **schema**
-3. Write **queries/mutations**
-4. Understand **resolvers**
-5. Know **tradeoffs**
+Your job when learning this:
+1. Separate **contract** from **delivery**
+2. Understand **who waits**
+3. Always resume from a **cursor**
+4. Budget **empty work vs held connections**
+5. Know **when boring HTTP is enough**
 
 ---
 
 ## 12. Mini glossary
 
-- **Schema**: what is possible
-- **Type**: a node shape in the graph
-- **Field**: a property you can ask for
-- **Query/Mutation/Subscription**: operation kinds
-- **Resolver**: function that resolves a field
-- **SDL**: language used to declare schema
-- **Document**: a GraphQL request string
-- **Variables**: dynamic inputs to operations
+- **Short polling**: repeated short HTTP requests on a timer
+- **Long polling**: HTTP request held until data or timeout
+- **WebSocket**: upgraded, long-lived, bidirectional frames
+- **SSE**: long-lived HTTP, server → client events
+- **Cursor / `after`**: resume point so you only fetch deltas
+- **Heartbeat**: traffic that proves the pipe is still alive
+- **Backpressure**: slowing producers when consumers cannot keep up
+- **Reconnect**: rebuild the pipe and catch up from the cursor
 
 ---
 
 ## 13. What “good understanding” looks like
 
-You understand GraphQL when you can answer:
+You understand communication techniques when you can answer:
 
-1. Why can one endpoint serve many screens?
-2. Why does query shape mirror response shape?
-3. What is the schema protecting/enabling?
-4. Where do resolvers fit?
-5. When would you still choose REST?
+1. Why is this **not** the same topic as REST vs GraphQL?
+2. Who waits in short poll vs long poll vs WebSocket?
+3. Why does every live API need a cursor?
+4. Which tax do you pay: empty requests, or held connections?
+5. When would you still just `GET` on a button click?
 
 If those answers are clear, your mental model is solid.
 
@@ -397,5 +365,6 @@ If those answers are clear, your mental model is solid.
 ## Next step
 
 Open:
-- `03-code-example/` and run the tiny server
-- Practice writing 3 queries by hand before using any fancy client library
+- `03-code-example/` and run the comparison server
+- Watch the **request counters** while you post one message
+- Then go deep: `short polling/`, `long polling/`, `web socket/`

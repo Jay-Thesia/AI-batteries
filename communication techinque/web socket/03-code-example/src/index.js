@@ -6,8 +6,9 @@ async function main() {
 
   const { url } = await startServer();
 
-  console.log(`GraphQL API ready at ${url}`);
-  console.log("Try the operations in README.md");
+  console.log(`WebSocket inbox ready at ${url}`);
+  console.log(`Socket endpoint: ${url.replace("http", "ws")}/ws`);
+  console.log("Open two browser tabs, or try the curl + ws examples in README.md");
 }
 
 main().catch((error) => {

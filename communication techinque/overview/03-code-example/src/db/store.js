@@ -1,17 +1,14 @@
 /**
- * In-memory store.
- * In a real service this would be Postgres / Mongo / etc.
- * Kept mutable so mutations feel realistic during learning.
+ * In-memory store — one inbox, three delivery techniques.
  */
 export const store = {
-  users: [],
-  posts: [],
+  messages: [],
   sequences: {
-    postId: 100,
+    messageId: 100,
   },
 };
 
-export function nextPostId() {
-  store.sequences.postId += 1;
-  return String(store.sequences.postId);
+export function nextMessageId() {
+  store.sequences.messageId += 1;
+  return String(store.sequences.messageId);
 }

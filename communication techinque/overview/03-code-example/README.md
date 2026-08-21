@@ -1,6 +1,6 @@
-# GraphQL Basics API (project-style)
+# Communication Techniques Overview (project-style)
 
-Small GraphQL service structured like a real codebase — not a single-file demo.
+One inbox. Three delivery pipes. Watch the **counters**, not just the message list.
 
 ## Folder structure
 
@@ -8,37 +8,26 @@ Small GraphQL service structured like a real codebase — not a single-file demo
 03-code-example/
 ├── package.json
 ├── README.md
+├── public/index.html            # three-column comparison
 └── src/
-    ├── index.js                 # app entry
-    ├── config/
-    │   └── index.js             # port / env
-    ├── db/
-    │   ├── store.js             # in-memory data store
-    │   └── seed.js              # seed data
-    ├── server/
-    │   └── createServer.js      # HTTP bootstrap
-    ├── graphql/
-    │   ├── root.typeDefs.js     # Query / Mutation roots
-    │   ├── typeDefs.js          # combine schemas
-    │   ├── resolvers.js         # combine resolvers
-    │   └── schema.js            # ApolloServer factory
-    └── modules/
-        ├── user/
-        │   ├── user.typeDefs.js
-        │   ├── user.resolvers.js
-        │   └── user.service.js
-        └── post/
-            ├── post.typeDefs.js
-            ├── post.resolvers.js
-            └── post.service.js
+    ├── index.js
+    ├── config/index.js
+    ├── db/store.js
+    ├── db/seed.js
+    ├── server/createServer.js
+    ├── routes/index.js          # /short /long /messages + POST
+    ├── techniques/waiters.js    # long-poll parked responses
+    ├── ws/attachWebSocket.js    # duplex frames
+    └── modules/message/
+        └── message.service.js   # shared domain
 ```
 
 ### Why this layout
-- **modules/** — domain ownership (types + resolvers + service)
-- **graphql/** — schema assembly only
-- **db/** — data access / persistence boundary
-- **server/** — transport bootstrap
-- Resolvers stay thin; services hold business rules
+- **One service** owns messages
+- **Short poll** is a normal GET that returns immediately
+- **Long poll** parks the GET until notify
+- **WebSocket** upgrades the same HTTP server
+- POST wakes long-poll waiters **and** broadcasts on the socket
 
 ## Run
 
@@ -48,84 +37,40 @@ npm install
 npm start
 ```
 
-Optional watch mode:
+Open: [http://localhost:4010](http://localhost:4010)
+
+Post a message and compare:
+
+| Column | What jumps | What stays quiet |
+|---|---|---|
+| Short polling | HTTP request count every 2s | List (until the next tick) |
+| Long polling | One wait finishes now | Request count when idle |
+| WebSocket | One frame | No extra HTTP GET |
+
+---
+
+## Requests to try
 
 ```bash
-npm run dev
-```
+# short poll (returns immediately, often empty)
+curl "http://localhost:4010/short/messages?after=102"
 
-Open: [http://localhost:4000](http://localhost:4000)
+# long poll (hangs until POST or ~20s timeout)
+curl "http://localhost:4010/long/messages/wait?after=102"
 
----
-
-## Operations to try
-
-### 1) List users
-
-```graphql
-query {
-  users {
-    id
-    name
-  }
-}
-```
-
-### 2) Nested user + posts
-
-```graphql
-query {
-  user(id: "1") {
-    name
-    posts {
-      title
-    }
-  }
-}
-```
-
-### 3) Create post
-
-```graphql
-mutation {
-  createPost(title: "My first GraphQL post", authorId: "1") {
-    id
-    title
-    author {
-      name
-    }
-  }
-}
-```
-
-### 4) Variables
-
-```graphql
-query GetUser($id: ID!) {
-  user(id: $id) {
-    id
-    name
-    email
-  }
-}
-```
-
-```json
-{
-  "id": "1"
-}
+# create — unblocks waiters and pushes to sockets
+curl -X POST http://localhost:4010/messages \
+  -H "Content-Type: application/json" \
+  -d '{"author":"Ada","text":"One write, three deliveries"}'
 ```
 
 ---
 
-## Trace one request through the code
+## Trace one POST through the code
 
-For `user(id: "1") { name posts { title } }`:
+1. `POST /messages` → `message.service.js` saves the row
+2. `waiterHub.notifyAll()` completes held long polls
+3. `publishMessage()` writes a WebSocket frame
+4. Short pollers only see it on their **next timer GET**
 
-1. `src/graphql/root.typeDefs.js` declares `user`
-2. `src/modules/user/user.resolvers.js` → `Query.user`
-3. `user.service.js` loads the user
-4. nested `posts` → `User.posts` resolver
-5. `post.service.js` filters posts by `authorId`
-
-That path is the GraphQL mental model in a real project shape.
+Same domain event. Three waiting strategies. That is the overview mental model.

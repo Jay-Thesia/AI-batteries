@@ -6,8 +6,8 @@ async function main() {
 
   const { url } = await startServer();
 
-  console.log(`GraphQL API ready at ${url}`);
-  console.log("Try the operations in README.md");
+  console.log(`Short polling inbox ready at ${url}`);
+  console.log("Open the URL in a browser, or try the curl examples in README.md");
 }
 
 main().catch((error) => {

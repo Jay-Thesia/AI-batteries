@@ -1,6 +1,6 @@
-# GraphQL Basics API (project-style)
+# Long Polling Inbox (project-style)
 
-Small GraphQL service structured like a real codebase — not a single-file demo.
+Small inbox that **holds** `GET /messages/wait` until a new message exists or a timeout fires.
 
 ## Folder structure
 
@@ -8,37 +8,33 @@ Small GraphQL service structured like a real codebase — not a single-file demo
 03-code-example/
 ├── package.json
 ├── README.md
+├── public/index.html            # browser waiter + counters
 └── src/
     ├── index.js                 # app entry
     ├── config/
-    │   └── index.js             # port / env
+    │   └── index.js             # port / wait timeout
     ├── db/
     │   ├── store.js             # in-memory data store
     │   └── seed.js              # seed data
     ├── server/
     │   └── createServer.js      # HTTP bootstrap
-    ├── graphql/
-    │   ├── root.typeDefs.js     # Query / Mutation roots
-    │   ├── typeDefs.js          # combine schemas
-    │   ├── resolvers.js         # combine resolvers
-    │   └── schema.js            # ApolloServer factory
+    ├── routes/
+    │   └── index.js             # mount module routes
     └── modules/
-        ├── user/
-        │   ├── user.typeDefs.js
-        │   ├── user.resolvers.js
-        │   └── user.service.js
-        └── post/
-            ├── post.typeDefs.js
-            ├── post.resolvers.js
-            └── post.service.js
+        └── message/
+            ├── message.routes.js
+            ├── message.controller.js
+            ├── message.service.js
+            └── waiters.js       # parked HTTP responses
 ```
 
 ### Why this layout
-- **modules/** — domain ownership (types + resolvers + service)
-- **graphql/** — schema assembly only
+- **modules/** — domain ownership (routes + controller + service)
+- **waiters.js** — the long-poll mechanism (not domain rules)
+- **routes/** — URL surface assembly only
 - **db/** — data access / persistence boundary
 - **server/** — transport bootstrap
-- Resolvers stay thin; services hold business rules
+- The **wait lives on the server**; the client retries immediately after each response
 
 ## Run
 
@@ -54,78 +50,52 @@ Optional watch mode:
 npm run dev
 ```
 
-Open: [http://localhost:4000](http://localhost:4000)
+Open: [http://localhost:4012](http://localhost:4012)
+
+Leave the tab sitting on “waiting…”, then post a message. The wait should finish **immediately**.
 
 ---
 
-## Operations to try
+## Requests to try
 
-### 1) List users
+Use two terminals so you can feel the hold.
 
-```graphql
-query {
-  users {
-    id
-    name
-  }
-}
+### 1) Start a wait (this hangs)
+
+```bash
+curl "http://localhost:4012/messages/wait?after=102"
 ```
 
-### 2) Nested user + posts
+### 2) In another terminal, create a message
 
-```graphql
-query {
-  user(id: "1") {
-    name
-    posts {
-      title
-    }
-  }
-}
+```bash
+curl -X POST http://localhost:4012/messages \
+  -H "Content-Type: application/json" \
+  -d '{"author":"Ada","text":"Unblock the waiter"}'
 ```
 
-### 3) Create post
+Terminal 1 should print the new message and exit.
 
-```graphql
-mutation {
-  createPost(title: "My first GraphQL post", authorId: "1") {
-    id
-    title
-    author {
-      name
-    }
-  }
-}
+### 3) Immediate snapshot (not a wait)
+
+```bash
+curl "http://localhost:4012/messages"
 ```
 
-### 4) Variables
+### 4) Timeout empty
 
-```graphql
-query GetUser($id: ID!) {
-  user(id: $id) {
-    id
-    name
-    email
-  }
-}
-```
-
-```json
-{
-  "id": "1"
-}
-```
+Start a wait and do nothing. After ~20s you get `{ "messages": [] }` — that is **success**, then the demo client waits again.
 
 ---
 
-## Trace one request through the code
+## Trace one wait through the code
 
-For `user(id: "1") { name posts { title } }`:
+For `GET /messages/wait?after=102`:
 
-1. `src/graphql/root.typeDefs.js` declares `user`
-2. `src/modules/user/user.resolvers.js` → `Query.user`
-3. `user.service.js` loads the user
-4. nested `posts` → `User.posts` resolver
-5. `post.service.js` filters posts by `authorId`
+1. `message.routes.js` matches `GET /wait`
+2. `waiters.js` checks the store **before** parking (no lost events in the gap)
+3. If empty, the response is held and a timeout is armed
+4. `POST /messages` → `message.service.js` saves → `waiterHub.notifyAll()`
+5. The parked response completes with the delta
 
-That path is the GraphQL mental model in a real project shape.
+That path is long polling: **one HTTP request, late on purpose**.

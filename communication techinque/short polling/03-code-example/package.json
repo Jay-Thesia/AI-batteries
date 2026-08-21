@@ -1,5 +1,5 @@
 {
-  "name": "graphql-basics-api",
+  "name": "short-polling-inbox",
   "version": "1.0.0",
   "private": true,
   "type": "module",
@@ -8,7 +8,6 @@
     "dev": "node --watch src/index.js"
   },
   "dependencies": {
-    "@apollo/server": "^5.5.1",
-    "graphql": "^16.14.2"
+    "express": "^5.1.0"
   }
 }

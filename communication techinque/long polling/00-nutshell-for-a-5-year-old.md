@@ -1,35 +1,25 @@
-# GraphQL — like explaining to a 5-year-old
+# Long polling — like explaining to a 5-year-old
 
-Imagine a **toy store** with lots of toys on many shelves.
+You want to know when a **letter** arrives.
 
-### Old way (REST) — many trips
-You want:
-- a red car
-- the car’s name
-- and how many wheels it has
+Instead of checking every minute, you sit next to the mailbox and say:
 
-With the old way, you might need:
-1. Go to shelf A → get the car
-2. Go to shelf B → get the name
-3. Go to shelf C → get the wheels
+> “Tap me when a letter is here. I’ll wait.”
 
-Many walks. Tiring. Sometimes you bring home toys you didn’t even ask for.
+The mail person either:
+- taps you when a letter drops in, or
+- taps you after a long while and says “still nothing — ask me again.”
 
-### GraphQL way — one trip, exact toys
-You write a **wish list** once:
+You walk home, then come back and wait again.
 
-> “I want the red car’s **name** and **wheels**. Nothing else.”
-
-You give that wish list to one helper (the GraphQL server).
-The helper brings back **exactly** those things. One trip. No extras.
+Fewer wasted trips. You **occupy a chair** the whole time you’re waiting.
 
 ---
 
-**That’s GraphQL:**
-- You say **exactly** what you want
-- You ask in **one place**
-- You get **only** what you asked for
+**That’s long polling:**
 
-Like ordering ice cream:
-- REST: “Give me the whole dessert menu” then pick
-- GraphQL: “One scoop vanilla, one scoop chocolate” — and that’s what you get
+- You ask **once** and wait
+- The answer comes when there is news (or time’s up)
+- Then you ask again
+
+Like raising your hand in class and keeping it up until the teacher calls on you — then raising it again.

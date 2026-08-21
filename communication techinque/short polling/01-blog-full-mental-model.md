@@ -1,394 +1,251 @@
-# GraphQL Blog — Full Mental Model
+# Short Polling — Full Mental Model
 
-> Goal: after reading this, you should be able to *think* in GraphQL, not just copy queries.
+> Goal: after reading this, you should be able to *design* a poller, not just `setInterval` a GET.
 
 ---
 
-## 1. What problem does GraphQL solve?
+## 1. What problem does short polling solve?
 
-Apps need data from servers.
+The client wants updates. The server will not call the client.
 
-**REST** usually means many endpoints:
-- `GET /users/1`
-- `GET /users/1/posts`
-- `GET /posts/5/comments`
+HTTP as originally used is **request → response → done**. There is no “server, ping me later.”
 
-Problems that show up often:
-1. **Over-fetching** — you get more fields than you need
-2. **Under-fetching** — one call is not enough, so you make more calls
-3. **Endpoint sprawl** — every new screen wants a slightly different shape of data
-4. **Frontend ↔ backend coupling** — UI changes often need new endpoints
+**Short polling** keeps that model and adds a clock:
 
-**GraphQL** is a different contract:
-- One endpoint (usually `/graphql`)
-- Client sends a **query** describing the exact data shape
-- Server returns JSON matching that shape
+1. Client asks “anything new since X?”
+2. Server answers immediately
+3. Client sleeps
+4. Repeat
 
-Mental shift:
+It solves “how do I notice changes?” with the **dumbest reliable tool**: ordinary HTTP GET.
 
-| REST thinking | GraphQL thinking |
-|---|---|
-| “Which URL do I call?” | “What graph of data do I need?” |
-| Resources + endpoints | Types + fields + relationships |
-| Multiple round trips | One query, nested data |
-| Fixed response shape | Client-chosen response shape |
+It does **not** solve efficiency. Most answers will be empty.
 
 ---
 
 ## 2. Core mental model (keep this forever)
 
-Think of your backend data as a **graph**:
-
 ```
-User
- ├── id
- ├── name
- ├── email
- └── posts[]
-      ├── id
-      ├── title
-      └── comments[]
-           ├── id
-           └── text
+Client clock          Server
+    │                    │
+    │  GET ?after=103    │
+    │ ─────────────────► │
+    │  []  (200, now)    │
+    │ ◄───────────────── │
+    │  sleep 2s          │
+    │  GET ?after=103    │
+    │ ─────────────────► │
+    │  [104]             │
+    │ ◄───────────────── │
+    │  remember after=104│
 ```
 
-GraphQL lets the client walk this graph and pick fields.
+A poll is:
 
-A query is basically:
+> “Give me the delta since my cursor. If there is none, say so **right now**.”
 
-> “Start at this entry point, then follow these relationships, and return only these fields.”
+That last part is the whole difference from long polling. The request never waits for the future.
 
-That is the whole idea.
+Mental shift:
+
+| One-shot HTTP thinking | Short polling thinking |
+|---|---|
+| User clicks → one GET | Timer clicks → many GETs |
+| Empty body is weird | Empty body is the common case |
+| Fetch the resource | Fetch the **delta since cursor** |
+| Latency = network | Latency = network + **interval** |
 
 ---
 
-## 3. The three operations
+## 3. The loop (only four pieces)
 
-### 1) Query — read data
-Like GET, but with a custom shape.
+1. **Cursor** — last id / timestamp you applied (`after=103`)
+2. **Request** — `GET /messages?after=103`
+3. **Apply** — render new rows, then advance the cursor
+4. **Schedule** — `setTimeout` / `setInterval` / cron on the client
 
-```graphql
-query {
-  user(id: "1") {
-    name
-    posts {
-      title
-    }
-  }
-}
-```
+Miss any piece and the poller is wrong:
 
-### 2) Mutation — change data
-Like POST/PUT/PATCH/DELETE.
+- No cursor → you re-download the world
+- No apply-before-schedule → you can skip or double-apply under lag
+- Fixed interval with overlapping requests → stampedes
 
-```graphql
-mutation {
-  createPost(title: "Hello", authorId: "1") {
-    id
-    title
-  }
-}
-```
-
-### 3) Subscription — live updates
-Server pushes changes (often over WebSockets).
-
-```graphql
-subscription {
-  messageAdded {
-    id
-    text
-  }
-}
-```
-
-Remember:
-- **Query** = ask
-- **Mutation** = change
-- **Subscription** = listen
+Prefer **schedule the next poll after the current one finishes** (`setTimeout` in the `finally`) over a raw `setInterval`. Overlapping polls are a classic bug on slow networks.
 
 ---
 
-## 4. Schema = the contract
+## 4. What the HTTP looks like
 
-The **schema** is the source of truth. It defines:
-- what types exist
-- what fields each type has
-- what arguments fields accept
-- what clients are allowed to ask
-
-Example schema (SDL = Schema Definition Language):
-
-```graphql
-type User {
-  id: ID!
-  name: String!
-  email: String
-  posts: [Post!]!
-}
-
-type Post {
-  id: ID!
-  title: String!
-  author: User!
-}
-
-type Query {
-  user(id: ID!): User
-  posts: [Post!]!
-}
-
-type Mutation {
-  createPost(title: String!, authorId: ID!): Post!
-}
+```http
+GET /messages?after=103 HTTP/1.1
+Host: localhost:4011
 ```
 
-Symbols to memorize:
-- `String`, `Int`, `Float`, `Boolean`, `ID` → scalar types
-- `Type!` → non-null (must return a value)
-- `[Type]` → list
-- `[Type!]!` → list itself required, and items required
+Immediate empty:
 
-Mental model:
-> If it’s not in the schema, the client cannot ask for it.
+```http
+HTTP/1.1 200 OK
+Content-Type: application/json
 
----
-
-## 5. Resolvers = how fields get values
-
-A query asks for fields.  
-A **resolver** is the function that fetches/computes each field.
-
-Simple picture:
-
-```
-Client query
-   ↓
-GraphQL engine checks schema
-   ↓
-Calls resolvers field by field
-   ↓
-Builds response object matching the query
+{ "messages": [], "latestId": "103" }
 ```
 
-Example:
+Immediate hit:
 
-```js
-const resolvers = {
-  Query: {
-    user: (_, { id }) => db.users.find(id),
-  },
-  User: {
-    posts: (user) => db.posts.byUser(user.id),
-  },
-};
-```
+```http
+HTTP/1.1 200 OK
+Content-Type: application/json
 
-Important insight:
-- Parent resolver returns an object
-- Child resolvers can use that parent object
-- Nested queries = nested resolver calls
-
-So GraphQL is not magic storage.  
-It is a **query language + execution engine** over your existing data (DB, APIs, services).
-
----
-
-## 6. One request, nested response
-
-Request:
-
-```graphql
 {
-  user(id: "1") {
-    name
-    posts {
-      title
-    }
-  }
+  "messages": [
+    { "id": "104", "author": "Ada", "text": "Ship it", "createdAt": "..." }
+  ],
+  "latestId": "104"
 }
 ```
 
-Response:
+Notes:
+- **200 + empty list is success**, not failure
+- `latestId` lets the client catch up even if it sent a stale cursor
+- `Cache-Control: no-store` — you almost never want a CDN to cache “anything new?”
 
-```json
-{
-  "data": {
-    "user": {
-      "name": "Ada",
-      "posts": [
-        { "title": "GraphQL basics" },
-        { "title": "Why schemas matter" }
-      ]
-    }
-  }
-}
+Creating data is a **normal POST**. Polling is only the read path:
+
+```http
+POST /messages
+Content-Type: application/json
+
+{ "author": "Ada", "text": "Ship it" }
 ```
 
-Notice:
-- Query shape ≈ response shape
-- That mirroring is a huge part of the mental model
+The next poll (up to `interval` later) sees it.
 
 ---
 
-## 7. How a GraphQL request actually travels
+## 5. Choosing the interval
 
-Typical HTTP flow:
+The interval is a product decision wearing a technical costume.
 
-1. Client sends `POST /graphql`
-2. Body contains:
-   - `query` (the GraphQL document)
-   - `variables` (optional dynamic values)
-   - `operationName` (optional, if multiple ops in one document)
-3. Server:
-   - parses query
-   - validates against schema
-   - executes resolvers
-   - returns `{ data, errors? }`
-
-Example with variables (best practice):
-
-```graphql
-query GetUser($id: ID!) {
-  user(id: $id) {
-    name
-  }
-}
+```
+perceived latency ≈ interval / 2   (on average)
+worst latency     ≈ interval + network
 ```
 
-```json
-{
-  "query": "query GetUser($id: ID!) { user(id: $id) { name } }",
-  "variables": { "id": "1" }
-}
-```
+| Interval | Feels like | Cost |
+|---|---|---|
+| 500ms | “live” | Brutal at scale |
+| 2–5s | chat-adjacent | Common for toys / small tools |
+| 15–30s | notifications | Email-like freshness |
+| 1–5 min | dashboards | Often the right default |
 
-Why variables?
-- Safer than string concatenation
-- Reusable queries
-- Better caching / tooling
+Ask: “If this update is 10 seconds late, is the feature still correct?”  
+If yes, poll. If no, you wanted long poll / SSE / WebSocket.
 
 ---
 
-## 8. Errors mental model
+## 6. Load math (why seniors flinch)
 
-In REST, errors often mean HTTP 404/500 and maybe no useful body.
+`clients × (1 / interval) = QPS` of mostly-empty GETs.
 
-In GraphQL:
-- HTTP may still be `200`
-- Business/field errors often live in `errors` array
-- Partial data is possible (`data` + `errors` together)
+- 10,000 clients × poll every 2s = **5,000 QPS** of “no”
+- Each request still hits TLS, auth, routing, maybe DB
 
-Example:
+Mitigations (still polling):
 
-```json
-{
-  "data": {
-    "user": {
-      "name": "Ada",
-      "email": null
-    }
-  },
-  "errors": [
-    {
-      "message": "Not authorized to view email",
-      "path": ["user", "email"]
-    }
-  ]
-}
-```
+- **ETag / If-None-Match** — 304 is cheaper than a JSON body, not cheaper than skipping the request
+- **Backoff when idle** — stretch the interval after N empty polls
+- **Jitter** — don’t let every mobile app wake on the same second
+- **Shared worker / one tab polls** — 5 open tabs should not mean 5× QPS
 
-Mental model:
-> GraphQL separates transport success from field resolution success.
+None of these make polling “real-time.” They make polling **survivable**.
 
 ---
 
-## 9. GraphQL vs REST (honest comparison)
+## 7. Errors
 
-### GraphQL shines when:
-- UI needs flexible, nested data
-- Mobile bandwidth matters (ask only needed fields)
-- Many clients want different shapes from one API
-- Rapid frontend iteration
+Treat poll failures like any GET:
 
-### REST can be better when:
-- Simple CRUD resources
-- Strong HTTP caching with URLs is enough
-- Team already has mature REST platform
-- File uploads / streaming patterns are simpler in classic HTTP
+- 401 → refresh auth, don’t tight-loop
+- 429 / 5xx → exponential backoff + jitter
+- Network drop → same backoff; keep the cursor
+- Never reset the cursor to `0` on error (duplicates / missed events)
 
-Not religion. Choose per product constraints.
+A good poller is boring: **cursor + timeout + backoff**.
 
 ---
 
-## 10. Common pitfalls (learn these early)
+## 8. Short polling vs the rest
 
-1. **N+1 problem**  
-   Nested lists can trigger many DB calls. Fix with batching/dataloader patterns.
+### Short polling shines when:
+- Delay of seconds is acceptable
+- Events are infrequent
+- You must stay on stateless HTTP
+- The team is small and the client is simple
 
-2. **Giant queries**  
-   Clients can ask for huge nested trees. Add query depth/complexity limits.
+### Long polling is better when:
+- You hate the empty answers but cannot open a WebSocket
+- “Tell me the moment it exists” matters more than holding a connection
 
-3. **Auth mistakes**  
-   Protect fields/resolvers, not only the endpoint.
+### WebSocket is better when:
+- Both sides talk a lot
+- Interval would have to be tiny to feel correct
 
-4. **Thinking GraphQL replaces your DB**  
-   It doesn’t. It sits above your data sources.
-
-5. **Ignoring schema design**  
-   Bad schema = painful API forever. Design types around domain meaning, not random UI screens.
+### Still just click-to-GET when:
+- The user is the clock (search, submit, refresh button)
 
 ---
 
-## 11. Full picture in one diagram
+## 9. Common mistakes
+
+1. **`setInterval` that ignores in-flight requests**  
+2. **Fetching `/messages` with no `after`**  
+3. **Polling POST/mutation endpoints**  
+4. **Caching the poll URL**  
+5. **Calling it real-time** — it is *bounded delay*, not push  
+6. **One interval for every environment** — local demo at 1s, production at 15s is normal
+
+---
+
+## 10. Full picture in one diagram
 
 ```text
-          ┌──────────────┐
-          │   Client UI  │
-          └──────┬───────┘
-                 │  query / mutation
-                 ▼
-          ┌──────────────┐
-          │ GraphQL API  │  ← schema (contract)
-          │  (1 endpoint)│
-          └──────┬───────┘
-                 │ resolvers
-        ┌────────┼────────┐
-        ▼        ▼        ▼
-      Database  REST     Services
+┌────────────┐   every N ms    ┌────────────┐
+│   Client   │ ──────────────► │   Server   │
+│  (timer)   │  GET ?after=X   │ (answers   │
+│            │ ◄────────────── │  immediately)
+└────────────┘   [] or delta   └─────┬──────┘
+                                     │
+                               Message store
 ```
 
-Your job when learning GraphQL:
-1. Understand the **graph**
-2. Read/write the **schema**
-3. Write **queries/mutations**
-4. Understand **resolvers**
-5. Know **tradeoffs**
+Your job when learning short polling:
+1. Always poll a **delta**
+2. Schedule the **next** poll after the current one ends
+3. Budget QPS = clients / interval
+4. Know when the interval itself is the wrong tool
 
 ---
 
-## 12. Mini glossary
+## 11. Mini glossary
 
-- **Schema**: what is possible
-- **Type**: a node shape in the graph
-- **Field**: a property you can ask for
-- **Query/Mutation/Subscription**: operation kinds
-- **Resolver**: function that resolves a field
-- **SDL**: language used to declare schema
-- **Document**: a GraphQL request string
-- **Variables**: dynamic inputs to operations
+- **Poll**: one “anything new?” request
+- **Interval**: sleep between polls
+- **Cursor (`after`)**: resume point
+- **Empty poll**: 200 with no new events — the common case
+- **Jitter**: random extra delay so clients don’t sync up
+- **Backoff**: slower retries after errors or long idle
 
 ---
 
-## 13. What “good understanding” looks like
+## 12. What “good understanding” looks like
 
-You understand GraphQL when you can answer:
+You understand short polling when you can answer:
 
-1. Why can one endpoint serve many screens?
-2. Why does query shape mirror response shape?
-3. What is the schema protecting/enabling?
-4. Where do resolvers fit?
-5. When would you still choose REST?
+1. Why does the server never wait?
+2. Why is empty 200 the normal result?
+3. How do you avoid overlapping polls?
+4. What QPS do 50k clients at 5s create?
+5. When would you stop polling and switch technique?
 
 If those answers are clear, your mental model is solid.
 
@@ -397,5 +254,6 @@ If those answers are clear, your mental model is solid.
 ## Next step
 
 Open:
-- `03-code-example/` and run the tiny server
-- Practice writing 3 queries by hand before using any fancy client library
+- `03-code-example/` and run the inbox
+- Watch the **poll counter** stay high while the message list stays quiet
+- Post one message and see it appear on the *next* tick — not instantly

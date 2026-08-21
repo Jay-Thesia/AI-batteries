@@ -1,35 +1,24 @@
-# GraphQL — like explaining to a 5-year-old
+# WebSockets — like explaining to a 5-year-old
 
-Imagine a **toy store** with lots of toys on many shelves.
+You and a friend want to talk **all afternoon**.
 
-### Old way (REST) — many trips
-You want:
-- a red car
-- the car’s name
-- and how many wheels it has
+Walking to each other’s houses for every sentence would be silly (that’s polling).
 
-With the old way, you might need:
-1. Go to shelf A → get the car
-2. Go to shelf B → get the name
-3. Go to shelf C → get the wheels
+Instead you pick up **walkie-talkies**:
 
-Many walks. Tiring. Sometimes you bring home toys you didn’t even ask for.
+- You can talk whenever you want
+- Your friend can talk whenever they want
+- You don’t hang up after each word
+- The line stays open until someone says “bye”
 
-### GraphQL way — one trip, exact toys
-You write a **wish list** once:
-
-> “I want the red car’s **name** and **wheels**. Nothing else.”
-
-You give that wish list to one helper (the GraphQL server).
-The helper brings back **exactly** those things. One trip. No extras.
+You still had to **call once** to start (that’s the HTTP upgrade). After that, it’s just the walkie-talkie.
 
 ---
 
-**That’s GraphQL:**
-- You say **exactly** what you want
-- You ask in **one place**
-- You get **only** what you asked for
+**That’s a WebSocket:**
 
-Like ordering ice cream:
-- REST: “Give me the whole dessert menu” then pick
-- GraphQL: “One scoop vanilla, one scoop chocolate” — and that’s what you get
+- One setup
+- Then **both directions**, anytime
+- Stay connected
+
+Like a phone call, not like mailing a letter, waiting for a reply, and mailing again.

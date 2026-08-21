@@ -1,6 +1,6 @@
-# GraphQL Basics API (project-style)
+# WebSocket Inbox (project-style)
 
-Small GraphQL service structured like a real codebase — not a single-file demo.
+Small inbox over a **duplex socket**. HTTP still exists for snapshots and curl-friendly posts.
 
 ## Folder structure
 
@@ -8,37 +8,34 @@ Small GraphQL service structured like a real codebase — not a single-file demo
 03-code-example/
 ├── package.json
 ├── README.md
+├── public/index.html            # browser client (two tabs!)
 └── src/
     ├── index.js                 # app entry
     ├── config/
-    │   └── index.js             # port / env
+    │   └── index.js             # port / heartbeat
     ├── db/
     │   ├── store.js             # in-memory data store
     │   └── seed.js              # seed data
     ├── server/
-    │   └── createServer.js      # HTTP bootstrap
-    ├── graphql/
-    │   ├── root.typeDefs.js     # Query / Mutation roots
-    │   ├── typeDefs.js          # combine schemas
-    │   ├── resolvers.js         # combine resolvers
-    │   └── schema.js            # ApolloServer factory
+    │   └── createServer.js      # HTTP + WS bootstrap
+    ├── routes/
+    │   └── index.js             # mount module routes
+    ├── ws/
+    │   └── attachWebSocket.js   # upgrade + frame protocol
     └── modules/
-        ├── user/
-        │   ├── user.typeDefs.js
-        │   ├── user.resolvers.js
-        │   └── user.service.js
-        └── post/
-            ├── post.typeDefs.js
-            ├── post.resolvers.js
-            └── post.service.js
+        └── message/
+            ├── message.routes.js
+            ├── message.controller.js
+            └── message.service.js
 ```
 
 ### Why this layout
-- **modules/** — domain ownership (types + resolvers + service)
-- **graphql/** — schema assembly only
+- **modules/** — domain ownership (HTTP adapters + service)
+- **ws/** — transport adapter (frames, heartbeat, broadcast)
+- **routes/** — URL surface assembly only
 - **db/** — data access / persistence boundary
-- **server/** — transport bootstrap
-- Resolvers stay thin; services hold business rules
+- **server/** — shared HTTP server so `/ws` can upgrade
+- Both POST and `{ "type": "send" }` call the **same service**
 
 ## Run
 
@@ -54,78 +51,56 @@ Optional watch mode:
 npm run dev
 ```
 
-Open: [http://localhost:4000](http://localhost:4000)
+Open: [http://localhost:4013](http://localhost:4013)
+
+Open a **second tab** to the same URL and send a message.
 
 ---
 
-## Operations to try
+## Requests to try
 
-### 1) List users
+### 1) HTTP snapshot (catch-up)
 
-```graphql
-query {
-  users {
-    id
-    name
-  }
-}
+```bash
+curl "http://localhost:4013/messages"
 ```
 
-### 2) Nested user + posts
+### 2) HTTP post — broadcasts to every socket
 
-```graphql
-query {
-  user(id: "1") {
-    name
-    posts {
-      title
-    }
-  }
-}
+```bash
+curl -X POST http://localhost:4013/messages \
+  -H "Content-Type: application/json" \
+  -d '{"author":"Ada","text":"Hello from curl"}'
 ```
 
-### 3) Create post
+Watch the browser tab(s) update without polling.
 
-```graphql
-mutation {
-  createPost(title: "My first GraphQL post", authorId: "1") {
-    id
-    title
-    author {
-      name
-    }
-  }
-}
-```
-
-### 4) Variables
-
-```graphql
-query GetUser($id: ID!) {
-  user(id: $id) {
-    id
-    name
-    email
-  }
-}
-```
+### 3) Frame protocol (from the page)
 
 ```json
-{
-  "id": "1"
-}
+{ "type": "catchup", "lastId": "102" }
+{ "type": "send", "author": "Ada", "text": "hi" }
+```
+
+Server frames:
+
+```json
+{ "type": "hello", "latestId": "102" }
+{ "type": "snapshot", "messages": [ ... ], "latestId": "102" }
+{ "type": "message", "message": { "id": "103", "text": "hi" } }
+{ "type": "error", "message": "text is required" }
 ```
 
 ---
 
-## Trace one request through the code
+## Trace one send through the code
 
-For `user(id: "1") { name posts { title } }`:
+For a browser `{ "type": "send" }`:
 
-1. `src/graphql/root.typeDefs.js` declares `user`
-2. `src/modules/user/user.resolvers.js` → `Query.user`
-3. `user.service.js` loads the user
-4. nested `posts` → `User.posts` resolver
-5. `post.service.js` filters posts by `authorId`
+1. `src/ws/attachWebSocket.js` parses the frame
+2. `message.service.js` saves the row
+3. `broadcast` writes `{ type: "message" }` to every open socket
 
-That path is the GraphQL mental model in a real project shape.
+For `POST /messages`, steps 2–3 are the same — only the adapter changes.
+
+That path is the WebSocket mental model: **pipe + typed messages + shared domain service**.

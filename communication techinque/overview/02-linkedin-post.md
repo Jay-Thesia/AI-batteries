@@ -1,43 +1,38 @@
-# LinkedIn Post — GraphQL
+# LinkedIn Post — Communication Techniques
 
 ---
 
 ## Ready-to-post version
 
-Spent some time revisiting GraphQL fundamentals today — not the tooling, the contract model.
+Spent some time separating two ideas teams mash together: **API contracts** and **communication techniques**.
 
-Most teams don’t struggle with GraphQL syntax. They struggle with the shift in thinking:
+REST / GraphQL / gRPC answer: “What does the message look like?”  
+Short polling / long polling / WebSockets answer: “How does the client find out something changed?”
 
-REST asks: “Which endpoint owns this resource?”  
-GraphQL asks: “What graph of data does this screen need?”
+That split explains most live-feature design:
 
-That single change explains most of the design decisions:
+• Short polling is a timer plus empty HTTP 200s — simple, wasteful, fine when delay is okay  
+• Long polling holds the request until there is news — push-like latency on plain HTTP  
+• WebSockets keep a duplex pipe — both sides talk without a new handshake each time  
 
-• Schema becomes the product contract, not an afterthought  
-• Clients select fields intentionally instead of accepting over-fetching  
-• Resolvers turn the graph into executable boundaries over existing data sources  
-• Query shape mirroring response shape is not convenience — it’s the mental model
+The contract can stay the same. You can poll a REST list, long-poll the same cursor, or stream the same events over a socket.
 
-GraphQL is not a replacement for REST by default. It’s a stronger fit when multiple clients need different slices of the same domain graph, and when frontend iteration speed matters more than URL-level simplicity.
+If you’re designing “real-time”: pick the waiting strategy first. Schema second. Fancy libraries last.
 
-If you’re adopting it: design the schema around domain meaning first. Tooling second. Clever queries last.
-
-#GraphQL #APIDesign #BackendEngineering #SoftwareArchitecture
+#WebSockets #SystemDesign #BackendEngineering #SoftwareArchitecture
 
 ---
 
-
-
 ## Optional shorter version
 
-Revisiting GraphQL with a stricter lens:
+Revisiting live updates with a stricter lens:
 
-It’s less about “one endpoint” and more about making the data graph explicit.
+It’s less about “we need WebSockets” and more about who waits.
 
-Schema = contract  
-Resolvers = execution boundaries  
-Client   = intentional field selection
+Short poll = client knocks on a timer  
+Long poll = client camps at the door  
+WebSocket = intercom stays open
 
-Use it when your product has many consumers asking for different shapes of the same domain. Otherwise REST is still a clean answer.
+Same inbox. Different delivery. Use HTTP when a click is enough.
 
-#GraphQL #APIDesign
+#SystemDesign #WebSockets #BackendEngineering

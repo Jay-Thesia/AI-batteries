@@ -1,35 +1,41 @@
-# GraphQL — like explaining to a 5-year-old
+# Communication techniques — like explaining to a 5-year-old
 
-Imagine a **toy store** with lots of toys on many shelves.
+Imagine you want to know when the **cookie jar** has new cookies.
 
-### Old way (REST) — many trips
-You want:
-- a red car
-- the car’s name
-- and how many wheels it has
+### Short polling — keep asking
+Every few seconds you walk to the kitchen:
 
-With the old way, you might need:
-1. Go to shelf A → get the car
-2. Go to shelf B → get the name
-3. Go to shelf C → get the wheels
+> “Any cookies yet?”  
+> “No.”  
+> “Any cookies yet?”  
+> “No.”  
+> “Any cookies yet?”  
+> “Yes! Two chocolate ones.”
 
-Many walks. Tiring. Sometimes you bring home toys you didn’t even ask for.
+You always get an answer fast. You also walk a lot for nothing.
 
-### GraphQL way — one trip, exact toys
-You write a **wish list** once:
+### Long polling — wait in the kitchen
+You walk to the kitchen once and **stay there**:
 
-> “I want the red car’s **name** and **wheels**. Nothing else.”
+> “Tell me when there are cookies. I’ll wait.”
 
-You give that wish list to one helper (the GraphQL server).
-The helper brings back **exactly** those things. One trip. No extras.
+Mom answers only when cookies appear (or if you’ve waited too long). Fewer walks. You occupy a chair the whole time.
+
+### WebSocket — leave a walkie-talkie
+You put a **walkie-talkie** on the counter.
+
+Mom can shout “cookies!” the instant they exist.  
+You can shout “I want milk too!” without walking again.
+
+The channel stays open both ways.
 
 ---
 
-**That’s GraphQL:**
-- You say **exactly** what you want
-- You ask in **one place**
-- You get **only** what you asked for
+**That’s the whole family:**
 
-Like ordering ice cream:
-- REST: “Give me the whole dessert menu” then pick
-- GraphQL: “One scoop vanilla, one scoop chocolate” — and that’s what you get
+- Short polling: “I’ll ask again in a bit.”
+- Long polling: “I’ll wait here until you have news.”
+- WebSocket: “Let’s keep a live line open.”
+
+REST / GraphQL / gRPC decide **what the message looks like**.  
+These techniques decide **when the message travels**.

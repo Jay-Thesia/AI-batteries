@@ -1,394 +1,268 @@
-# GraphQL Blog — Full Mental Model
+# Long Polling — Full Mental Model
 
-> Goal: after reading this, you should be able to *think* in GraphQL, not just copy queries.
+> Goal: after reading this, you should be able to *think* in held requests, not treat this as “slow short polling.”
 
 ---
 
-## 1. What problem does GraphQL solve?
+## 1. What problem does long polling solve?
 
-Apps need data from servers.
+Short polling wastes answers. Most replies are “nothing changed.”
 
-**REST** usually means many endpoints:
-- `GET /users/1`
-- `GET /users/1/posts`
-- `GET /posts/5/comments`
+You still want:
+- ordinary HTTP (works through most proxies)
+- low latency when an event *does* happen
+- no WebSocket infrastructure yet
 
-Problems that show up often:
-1. **Over-fetching** — you get more fields than you need
-2. **Under-fetching** — one call is not enough, so you make more calls
-3. **Endpoint sprawl** — every new screen wants a slightly different shape of data
-4. **Frontend ↔ backend coupling** — UI changes often need new endpoints
+**Long polling** keeps HTTP request/response, but **delays the response**.
 
-**GraphQL** is a different contract:
-- One endpoint (usually `/graphql`)
-- Client sends a **query** describing the exact data shape
-- Server returns JSON matching that shape
+The client says: “Answer me when you have a delta, or when you’ve waited long enough.”
 
-Mental shift:
-
-| REST thinking | GraphQL thinking |
-|---|---|
-| “Which URL do I call?” | “What graph of data do I need?” |
-| Resources + endpoints | Types + fields + relationships |
-| Multiple round trips | One query, nested data |
-| Fixed response shape | Client-chosen response shape |
+The server parks that request in memory and **completes it later**.
 
 ---
 
 ## 2. Core mental model (keep this forever)
 
-Think of your backend data as a **graph**:
-
 ```
-User
- ├── id
- ├── name
- ├── email
- └── posts[]
-      ├── id
-      ├── title
-      └── comments[]
-           ├── id
-           └── text
+Client                         Server
+  │  GET /wait?after=103         │
+  │ ───────────────────────────► │  (held — no body yet)
+  │                              │
+  │         ... time passes ...  │
+  │                              │  POST creates id 104
+  │  200 { messages: [104] }     │
+  │ ◄─────────────────────────── │
+  │  GET /wait?after=104         │
+  │ ───────────────────────────► │  (held again)
 ```
 
-GraphQL lets the client walk this graph and pick fields.
+A long poll is:
 
-A query is basically:
+> “Don’t answer until the world is different from my cursor — unless you must, because timers and proxies exist.”
 
-> “Start at this entry point, then follow these relationships, and return only these fields.”
+Mental shift:
 
-That is the whole idea.
+| Short polling | Long polling |
+|---|---|
+| Answer immediately | Answer when ready |
+| Sleep on the **client** | Wait on the **server** |
+| Empty 200s are frequent | Empty 200s mean **timeout**, then retry |
+| Stateless per tick | Server remembers waiters until reply |
+
+It is still **one request, one response**. It is not a socket. After the response, the conversation is over. The client must open the next wait immediately.
 
 ---
 
-## 3. The three operations
+## 3. The wait loop (client)
 
-### 1) Query — read data
-Like GET, but with a custom shape.
+```
+cursor = lastId
 
-```graphql
-query {
-  user(id: "1") {
-    name
-    posts {
-      title
-    }
-  }
-}
+loop:
+  response = GET /messages/wait?after=cursor&timeout=25000
+  apply(response.messages)
+  cursor = response.latestId
+  // no sleep — open the next wait now
 ```
 
-### 2) Mutation — change data
-Like POST/PUT/PATCH/DELETE.
+Two rules:
 
-```graphql
-mutation {
-  createPost(title: "Hello", authorId: "1") {
-    id
-    title
-  }
-}
-```
+1. **Retry immediately after a response** (data *or* timeout)
+2. **Never overlap waits** for the same cursor stream (one in-flight GET)
 
-### 3) Subscription — live updates
-Server pushes changes (often over WebSockets).
-
-```graphql
-subscription {
-  messageAdded {
-    id
-    text
-  }
-}
-```
-
-Remember:
-- **Query** = ask
-- **Mutation** = change
-- **Subscription** = listen
+A tiny `setTimeout(0)` or 50ms delay after errors is fine. Sleeping 2 seconds after a *successful timeout* re-introduces short-poll latency and misses the point.
 
 ---
 
-## 4. Schema = the contract
+## 4. The waiter list (server)
 
-The **schema** is the source of truth. It defines:
-- what types exist
-- what fields each type has
-- what arguments fields accept
-- what clients are allowed to ask
+This is the part that is not a normal REST handler.
 
-Example schema (SDL = Schema Definition Language):
+```
+waiters = []   // { after, resolve, timer }
 
-```graphql
-type User {
-  id: ID!
-  name: String!
-  email: String
-  posts: [Post!]!
-}
+on GET /wait:
+  delta = messagesAfter(after)
+  if delta.length: return immediately
+  else park this request in waiters
 
-type Post {
-  id: ID!
-  title: String!
-  author: User!
-}
+on POST /messages:
+  save message
+  wake every waiter whose cursor is now stale
+  each waiter gets the delta and is removed
 
-type Query {
-  user(id: ID!): User
-  posts: [Post!]!
-}
-
-type Mutation {
-  createPost(title: String!, authorId: ID!): Post!
-}
+on timeout:
+  return { messages: [], latestId: after }
+  remove waiter
 ```
 
-Symbols to memorize:
-- `String`, `Int`, `Float`, `Boolean`, `ID` → scalar types
-- `Type!` → non-null (must return a value)
-- `[Type]` → list
-- `[Type!]!` → list itself required, and items required
+You are now holding **HTTP connections as data**. That is the cost:
 
-Mental model:
-> If it’s not in the schema, the client cannot ask for it.
+- RAM for the waiter object
+- a file descriptor / socket
+- a timer per request (or a shared sweep)
+
+If the client hangs up, you **must** remove the waiter or you leak memory. Listen for `req.close` / `res.on("close")`.
 
 ---
 
-## 5. Resolvers = how fields get values
+## 5. What the HTTP looks like
 
-A query asks for fields.  
-A **resolver** is the function that fetches/computes each field.
-
-Simple picture:
-
-```
-Client query
-   ↓
-GraphQL engine checks schema
-   ↓
-Calls resolvers field by field
-   ↓
-Builds response object matching the query
+```http
+GET /messages/wait?after=103 HTTP/1.1
+Host: localhost:4012
 ```
 
-Example:
+The connection sits there. Then either:
 
-```js
-const resolvers = {
-  Query: {
-    user: (_, { id }) => db.users.find(id),
-  },
-  User: {
-    posts: (user) => db.posts.byUser(user.id),
-  },
-};
+**News**
+
+```http
+HTTP/1.1 200 OK
+Content-Type: application/json
+
+{ "messages": [{ "id": "104", "text": "hi" }], "latestId": "104" }
 ```
 
-Important insight:
-- Parent resolver returns an object
-- Child resolvers can use that parent object
-- Nested queries = nested resolver calls
+**Timeout (still success)**
 
-So GraphQL is not magic storage.  
-It is a **query language + execution engine** over your existing data (DB, APIs, services).
+```http
+HTTP/1.1 200 OK
+Content-Type: application/json
+
+{ "messages": [], "latestId": "103" }
+```
+
+Timeouts are not errors. They exist because:
+
+- load balancers kill idle HTTP (~30–60s is a common default)
+- you need a chance to re-auth / notice a crashed server
+- clients can confirm “I am still here”
+
+Pick a timeout **shorter than the proxy idle timeout**. 20–25 seconds is a popular teaching default.
+
+Disable response buffering for this route if a reverse proxy would hold the body. For JSON-at-the-end long poll, buffering is actually fine — you send nothing until you’re done. (SSE is the technique that needs unbuffered streaming.)
 
 ---
 
-## 6. One request, nested response
+## 6. Race: event arrives while nobody is waiting
 
-Request:
+Timeline:
 
-```graphql
-{
-  user(id: "1") {
-    name
-    posts {
-      title
-    }
-  }
-}
-```
+1. Wait returns with message 104
+2. Client is between requests (a few milliseconds)
+3. Message 105 is created
+4. Client opens wait with `after=104`
 
-Response:
+If step 3 happens in that gap, the new wait’s **immediate delta check** must return 105. That is why the handler always looks at the store **before** parking.
 
-```json
-{
-  "data": {
-    "user": {
-      "name": "Ada",
-      "posts": [
-        { "title": "GraphQL basics" },
-        { "title": "Why schemas matter" }
-      ]
-    }
-  }
-}
-```
-
-Notice:
-- Query shape ≈ response shape
-- That mirroring is a huge part of the mental model
+If you only wake waiters on POST and skip the “already newer?” check, you drop events. This is the #1 long-poll bug.
 
 ---
 
-## 7. How a GraphQL request actually travels
+## 7. Load and fairness
 
-Typical HTTP flow:
+1000 clients almost-idle:
 
-1. Client sends `POST /graphql`
-2. Body contains:
-   - `query` (the GraphQL document)
-   - `variables` (optional dynamic values)
-   - `operationName` (optional, if multiple ops in one document)
-3. Server:
-   - parses query
-   - validates against schema
-   - executes resolvers
-   - returns `{ data, errors? }`
+- ~1000 held connections (the tax)
+- ~1000 new waits per timeout period (the heartbeat)
+- 1 POST fans out to 1000 completions — a **thundering herd** of responses
 
-Example with variables (best practice):
+Mitigations:
 
-```graphql
-query GetUser($id: ID!) {
-  user(id: $id) {
-    name
-  }
-}
-```
+- Cap waiters per user
+- Broadcast via pub/sub (Redis) so multiple Node processes share events
+- Don’t do this with a single in-memory array in production multi-instance without a bus
 
-```json
-{
-  "query": "query GetUser($id: ID!) { user(id: $id) { name } }",
-  "variables": { "id": "1" }
-}
-```
-
-Why variables?
-- Safer than string concatenation
-- Reusable queries
-- Better caching / tooling
+Long polling **does not** give you WebSocket fanout for free. Horizontal scale still needs a pub/sub.
 
 ---
 
-## 8. Errors mental model
+## 8. Errors
 
-In REST, errors often mean HTTP 404/500 and maybe no useful body.
-
-In GraphQL:
-- HTTP may still be `200`
-- Business/field errors often live in `errors` array
-- Partial data is possible (`data` + `errors` together)
-
-Example:
-
-```json
-{
-  "data": {
-    "user": {
-      "name": "Ada",
-      "email": null
-    }
-  },
-  "errors": [
-    {
-      "message": "Not authorized to view email",
-      "path": ["user", "email"]
-    }
-  ]
-}
-```
-
-Mental model:
-> GraphQL separates transport success from field resolution success.
+- Client abort → remove waiter, do not `res.json` on a destroyed response
+- 5xx on wait → backoff, **keep cursor**
+- Auth expired mid-wait → 401, client refreshes token, new wait
+- Duplicate delivery: make apply **idempotent** (keyed by message id)
 
 ---
 
-## 9. GraphQL vs REST (honest comparison)
+## 9. Long polling vs the rest
 
-### GraphQL shines when:
-- UI needs flexible, nested data
-- Mobile bandwidth matters (ask only needed fields)
-- Many clients want different shapes from one API
-- Rapid frontend iteration
+### Long polling shines when:
+- You want near-push on HTTP/1
+- Client mostly listens
+- WebSockets are blocked or not worth the ops yet
+- Event rate is modest
 
-### REST can be better when:
-- Simple CRUD resources
-- Strong HTTP caching with URLs is enough
-- Team already has mature REST platform
-- File uploads / streaming patterns are simpler in classic HTTP
+### Short polling is better when:
+- You refuse to hold connections
+- A 15s delay is fine
+- Server is a dumb file/CDN
 
-Not religion. Choose per product constraints.
+### WebSocket is better when:
+- Client sends continuously
+- You are tired of reconnect-on-every-message
+- You need frames both ways with less HTTP overhead
+
+### SSE is a sibling:
+- Server streams many events on **one** HTTP response
+- Browser reconnects for you
+- Still not duplex
 
 ---
 
-## 10. Common pitfalls (learn these early)
+## 10. Common mistakes
 
-1. **N+1 problem**  
-   Nested lists can trigger many DB calls. Fix with batching/dataloader patterns.
-
-2. **Giant queries**  
-   Clients can ask for huge nested trees. Add query depth/complexity limits.
-
-3. **Auth mistakes**  
-   Protect fields/resolvers, not only the endpoint.
-
-4. **Thinking GraphQL replaces your DB**  
-   It doesn’t. It sits above your data sources.
-
-5. **Ignoring schema design**  
-   Bad schema = painful API forever. Design types around domain meaning, not random UI screens.
+1. **Sleeping after timeout** like a short poller  
+2. **Parking before checking the store** (lost events in the gap)  
+3. **No timeout** (zombie requests vs proxies)  
+4. **Leaking waiters** on client disconnect  
+5. **One Node process memory waiters** behind a load balancer with two nodes and no pub/sub  
+6. **Calling it a WebSocket** — it is still request/response
 
 ---
 
 ## 11. Full picture in one diagram
 
 ```text
-          ┌──────────────┐
-          │   Client UI  │
-          └──────┬───────┘
-                 │  query / mutation
-                 ▼
-          ┌──────────────┐
-          │ GraphQL API  │  ← schema (contract)
-          │  (1 endpoint)│
-          └──────┬───────┘
-                 │ resolvers
-        ┌────────┼────────┐
-        ▼        ▼        ▼
-      Database  REST     Services
+Client ── GET /wait?after=X ──►  Waiter list ──► (held)
+                                      ▲
+POST /messages ── save ── wake waiters ┘
+                                      │
+Client ◄── 200 delta or empty timeout─┘
+Client ── GET /wait?after=X' ──►  (held again)
 ```
 
-Your job when learning GraphQL:
-1. Understand the **graph**
-2. Read/write the **schema**
-3. Write **queries/mutations**
-4. Understand **resolvers**
-5. Know **tradeoffs**
+Your job when learning long polling:
+1. Hold the request, don’t sleep the client
+2. Check the store **before** parking
+3. Timeout on purpose
+4. Clean up disconnects
+5. Resume from a cursor, always
 
 ---
 
 ## 12. Mini glossary
 
-- **Schema**: what is possible
-- **Type**: a node shape in the graph
-- **Field**: a property you can ask for
-- **Query/Mutation/Subscription**: operation kinds
-- **Resolver**: function that resolves a field
-- **SDL**: language used to declare schema
-- **Document**: a GraphQL request string
-- **Variables**: dynamic inputs to operations
+- **Waiter**: parked HTTP request waiting for a delta
+- **Hold / park**: delay `res.json` until an event or timeout
+- **Timeout empty**: 200 with `[]` meaning “ask again”
+- **Gap race**: event between two waits — fixed by immediate delta check
+- **Fan-out**: one write completing many waiters
+- **Pub/sub**: how multiple servers share “wake up” signals
 
 ---
 
 ## 13. What “good understanding” looks like
 
-You understand GraphQL when you can answer:
+You understand long polling when you can answer:
 
-1. Why can one endpoint serve many screens?
-2. Why does query shape mirror response shape?
-3. What is the schema protecting/enabling?
-4. Where do resolvers fit?
-5. When would you still choose REST?
+1. Who is waiting — client timer or server?
+2. Why timeout empty is success?
+3. How do you not drop events between waits?
+4. What do you leak if you ignore `req.close`?
+5. When is a WebSocket still the better pipe?
 
 If those answers are clear, your mental model is solid.
 
@@ -397,5 +271,6 @@ If those answers are clear, your mental model is solid.
 ## Next step
 
 Open:
-- `03-code-example/` and run the tiny server
-- Practice writing 3 queries by hand before using any fancy client library
+- `03-code-example/` and run the server
+- In the demo, start waiting, then post a message — the wait should finish **immediately**
+- Watch a timeout fire if you do nothing

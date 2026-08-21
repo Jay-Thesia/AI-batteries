@@ -1,43 +1,43 @@
-# LinkedIn Post — GraphQL
+# LinkedIn Post — Long Polling
 
 ---
 
 ## Ready-to-post version
 
-Spent some time revisiting GraphQL fundamentals today — not the tooling, the contract model.
+Spent some time revisiting long polling — the technique people skip on the way to WebSockets.
 
-Most teams don’t struggle with GraphQL syntax. They struggle with the shift in thinking:
+Most teams don’t struggle with “hold the request.” They struggle with the shift in thinking:
 
-REST asks: “Which endpoint owns this resource?”  
-GraphQL asks: “What graph of data does this screen need?”
+Short polling sleeps on the client.  
+Long polling sleeps on the server.
 
-That single change explains most of the design decisions:
+The HTTP contract stays request/response. The response is just **late on purpose** — until a delta exists, or a timeout protects you from idle-proxy death.
 
-• Schema becomes the product contract, not an afterthought  
-• Clients select fields intentionally instead of accepting over-fetching  
-• Resolvers turn the graph into executable boundaries over existing data sources  
-• Query shape mirroring response shape is not convenience — it’s the mental model
+That model explains the real bugs:
 
-GraphQL is not a replacement for REST by default. It’s a stronger fit when multiple clients need different slices of the same domain graph, and when frontend iteration speed matters more than URL-level simplicity.
+• Always read the store before parking, or you drop events in the gap between waits  
+• Empty 200 after timeout means “ask again now,” not “sleep like a poller”  
+• Waiters are memory + sockets — disconnect must unregister them  
+• Multiple app instances still need a pub/sub to wake everyone  
 
-If you’re adopting it: design the schema around domain meaning first. Tooling second. Clever queries last.
+Long polling is not a relic. It’s a stronger fit when you want near-real-time over boring HTTP and you are not ready to operate a duplex socket fleet.
 
-#GraphQL #APIDesign #BackendEngineering #SoftwareArchitecture
+If you’re implementing it: cursor first. Timeout second. Fan-out third.
+
+#SystemDesign #BackendEngineering #HTTP #SoftwareArchitecture
 
 ---
 
-
-
 ## Optional shorter version
 
-Revisiting GraphQL with a stricter lens:
+Revisiting long polling with a stricter lens:
 
-It’s less about “one endpoint” and more about making the data graph explicit.
+It’s less about “slow polling” and more about who waits.
 
-Schema = contract  
-Resolvers = execution boundaries  
-Client   = intentional field selection
+Client asks once and camps  
+Server answers when the cursor is stale  
+Timeout empty = success, retry immediately
 
-Use it when your product has many consumers asking for different shapes of the same domain. Otherwise REST is still a clean answer.
+Use it when HTTP must stay, but empty 200s are too expensive. When both sides need to chatter, open a WebSocket.
 
-#GraphQL #APIDesign
+#SystemDesign #HTTP

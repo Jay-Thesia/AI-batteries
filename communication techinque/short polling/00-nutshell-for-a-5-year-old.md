@@ -1,35 +1,25 @@
-# GraphQL — like explaining to a 5-year-old
+# Short polling — like explaining to a 5-year-old
 
-Imagine a **toy store** with lots of toys on many shelves.
+You want to know when a **letter** arrives in the mailbox.
 
-### Old way (REST) — many trips
-You want:
-- a red car
-- the car’s name
-- and how many wheels it has
+You don’t wait at the box. You walk over **every few minutes**:
 
-With the old way, you might need:
-1. Go to shelf A → get the car
-2. Go to shelf B → get the name
-3. Go to shelf C → get the wheels
+> “Any letters?” — “No.”  
+> “Any letters?” — “No.”  
+> “Any letters?” — “Yes, one from Grandma.”
 
-Many walks. Tiring. Sometimes you bring home toys you didn’t even ask for.
-
-### GraphQL way — one trip, exact toys
-You write a **wish list** once:
-
-> “I want the red car’s **name** and **wheels**. Nothing else.”
-
-You give that wish list to one helper (the GraphQL server).
-The helper brings back **exactly** those things. One trip. No extras.
+Each visit is short. The mailbox answers right away.  
+Most visits are wasted walking. That’s okay if letters are rare and you don’t mind being a little late.
 
 ---
 
-**That’s GraphQL:**
-- You say **exactly** what you want
-- You ask in **one place**
-- You get **only** what you asked for
+**That’s short polling:**
 
-Like ordering ice cream:
-- REST: “Give me the whole dessert menu” then pick
-- GraphQL: “One scoop vanilla, one scoop chocolate” — and that’s what you get
+- You ask on a **schedule**
+- You always get an answer **now**
+- “No news” is still an answer
+
+Like refreshing a webpage:
+- You click refresh
+- The page comes back immediately
+- Usually nothing changed
