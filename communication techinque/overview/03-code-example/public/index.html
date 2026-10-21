@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Communication techniques — same inbox</title>
+    <style>
+      :root {
+        color-scheme: light;
+        font-family: ui-sans-serif, system-ui, sans-serif;
+      }
+      body { margin: 0; padding: 1.25rem; line-height: 1.4; }
+      h1 { font-size: 1.35rem; margin: 0 0 0.4rem; }
+      .muted { color: #555; max-width: 70rem; }
+      form { display: flex; gap: 0.5rem; margin: 1rem 0; max-width: 40rem; }
+      input, button { font: inherit; padding: 0.45rem 0.6rem; }
+      input { flex: 1; }
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 1rem;
+      }
+      @media (max-width: 900px) { .grid { grid-template-columns: 1fr; } }
+      .col {
+        border: 1px solid #e5e7eb;
+        border-radius: 10px;
+        padding: 0.9rem;
+        min-height: 16rem;
+      }
+      .col h2 { font-size: 1.05rem; margin: 0 0 0.35rem; }
+      .stat { font-size: 0.9rem; color: #374151; margin: 0.15rem 0; }
+      ul { padding-left: 1.1rem; margin: 0.6rem 0 0; }
+      li { margin: 0.25rem 0; font-size: 0.95rem; }
+    </style>
+  </head>
+  <body>
+    <h1>Same inbox, three techniques</h1>
+    <p class="muted">
+      Post once. Short polling notices on the next timer tick (and burns empty GETs).
+      Long polling finishes the held request immediately. WebSocket pushes a frame with no extra HTTP request.
+    </p>
+
+    <form id="form">
+      <input id="author" placeholder="Your name" value="Ada" />
+      <input id="text" placeholder="Write a message" required />
+      <button type="submit">Post to inbox</button>
+    </form>
+
+    <div class="grid">
+      <section class="col">
+        <h2>Short polling</h2>
+        <div class="stat">HTTP requests: <strong id="sp-reqs">0</strong></div>
+        <div class="stat">Empty replies: <strong id="sp-empty">0</strong></div>
+        <ul id="sp-list"></ul>
+      </section>
+      <section class="col">
+        <h2>Long polling</h2>
+        <div class="stat">Waits finished: <strong id="lp-reqs">0</strong></div>
+        <div class="stat">Timeouts: <strong id="lp-empty">0</strong></div>
+        <ul id="lp-list"></ul>
+      </section>
+      <section class="col">
+        <h2>WebSocket</h2>
+        <div class="stat">Frames in: <strong id="ws-reqs">0</strong></div>
+        <div class="stat">Status: <strong id="ws-status">connecting…</strong></div>
+        <ul id="ws-list"></ul>
+      </section>
+    </div>
+
+    <script>
+      const $ = (id) => document.getElementById(id);
+
+      function makeRenderer(listId) {
+        const seen = new Set();
+        return (message) => {
+          if (!message || seen.has(message.id)) return;
+          seen.add(message.id);
+          const li = document.createElement("li");
+          li.textContent = `${message.author}: ${message.text} (#${message.id})`;
+          $(listId).appendChild(li);
+        };
+      }
+
+      const renderShort = makeRenderer("sp-list");
+      const renderLong = makeRenderer("lp-list");
+      const renderWs = makeRenderer("ws-list");
+
+      async function shortPollLoop() {
+        let after = "";
+        let reqs = 0;
+        let empty = 0;
+        async function tick() {
+          reqs += 1;
+          $("sp-reqs").textContent = String(reqs);
+          const url = after ? `/short/messages?after=${encodeURIComponent(after)}` : "/short/messages";
+          const body = await fetch(url).then((r) => r.json());
+          if (!body.messages.length) {
+            empty += 1;
+            $("sp-empty").textContent = String(empty);
+          }
+          body.messages.forEach(renderShort);
+          after = body.latestId || after;
+          setTimeout(tick, 2000);
+        }
+        tick();
+      }
+
+      async function longPollLoop() {
+        let after = "";
+        let reqs = 0;
+        let timeouts = 0;
+        async function wait() {
+          const url = after ? `/long/messages/wait?after=${encodeURIComponent(after)}` : "/long/messages/wait";
+          try {
+            const body = await fetch(url).then((r) => r.json());
+            reqs += 1;
+            $("lp-reqs").textContent = String(reqs);
+            if (body.messages.length) {
+              body.messages.forEach(renderLong);
+            } else {
+              timeouts += 1;
+              $("lp-empty").textContent = String(timeouts);
+            }
+            after = body.latestId || after;
+          } catch {
+            await new Promise((r) => setTimeout(r, 500));
+          }
+          wait();
+        }
+        wait();
+      }
+
+      function websocketLoop() {
+        let lastId = "";
+        let frames = 0;
+        const protocol = location.protocol === "https:" ? "wss:" : "ws:";
+        const socket = new WebSocket(`${protocol}//${location.host}/ws`);
+        socket.addEventListener("open", () => {
+          $("ws-status").textContent = "open";
+          socket.send(JSON.stringify({ type: "catchup", lastId }));
+        });
+        socket.addEventListener("message", (event) => {
+          frames += 1;
+          $("ws-reqs").textContent = String(frames);
+          const body = JSON.parse(event.data);
+          if (body.type === "snapshot") {
+            body.messages.forEach(renderWs);
+            lastId = body.latestId || lastId;
+          }
+          if (body.type === "message") {
+            renderWs(body.message);
+            lastId = body.message.id;
+          }
+        });
+        socket.addEventListener("close", () => {
+          $("ws-status").textContent = "closed — retrying";
+          setTimeout(websocketLoop, 1000);
+        });
+      }
+
+      $("form").addEventListener("submit", async (event) => {
+        event.preventDefault();
+        await fetch("/messages", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            author: $("author").value,
+            text: $("text").value,
+          }),
+        });
+        $("text").value = "";
+      });
+
+      shortPollLoop();
+      longPollLoop();
+      websocketLoop();
+    </script>
+  </body>
+</html>

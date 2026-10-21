@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>XSS comment wall (encoded)</title>
+    <link rel="stylesheet" href="/app.css" />
+  </head>
+  <body>
+    <h1>XSS comment wall — encoded</h1>
+    <p class="muted">
+      Comments are stored as JSON and rendered with <code>textContent</code>.
+      Markup-looking characters stay letters. CSP is a seatbelt
+      (<code>script-src 'self'</code> — no inline scripts).
+    </p>
+
+    <div class="locks">
+      <div class="lock">Render: <strong>textContent</strong></div>
+      <div class="lock">Output: <strong>escapeHtml</strong></div>
+      <div class="lock">Header: <strong>CSP</strong></div>
+    </div>
+
+    <form id="form">
+      <input name="author" placeholder="Your name" value="Ada" autocomplete="nickname" />
+      <input name="text" placeholder="Write a comment (try angle brackets)" required />
+      <button type="submit">Post</button>
+    </form>
+    <p id="error" class="error" hidden></p>
+
+    <h2>Comments</h2>
+    <ul id="list"></ul>
+
+    <script src="/app.js"></script>
+  </body>
+</html>

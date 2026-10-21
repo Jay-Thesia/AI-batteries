@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>CSRF account email (token required)</title>
+    <link rel="stylesheet" href="/app.css" />
+  </head>
+  <body>
+    <h1>CSRF account page — token required</h1>
+    <p class="muted">
+      Login sets an <code>HttpOnly</code> + <code>SameSite=Lax</code> session cookie
+      (identity). Changing email also needs <code>X-CSRF-Token</code> (intent).
+      The cookie is sent automatically; the token is not.
+    </p>
+
+    <div class="locks">
+      <div class="lock">Cookie: <strong>who</strong></div>
+      <div class="lock">CSRF token: <strong>intent</strong></div>
+      <div class="lock">SameSite: <strong>Lax</strong></div>
+    </div>
+
+    <p id="message" class="muted" hidden></p>
+
+    <section id="logged-out">
+      <h2>Log in</h2>
+      <form id="login-form">
+        <input name="name" value="Ada" autocomplete="username" />
+        <button type="submit">Log in</button>
+      </form>
+    </section>
+
+    <section id="logged-in" hidden>
+      <div class="panel">
+        <div>Signed in as <strong id="name">—</strong></div>
+        <div>Email: <strong id="email">—</strong></div>
+        <div class="token">CSRF token: <span id="csrf">—</span></div>
+      </div>
+
+      <h2>Change email (with token)</h2>
+      <form id="email-form">
+        <input name="email" type="email" placeholder="new@example.com" required />
+        <button type="submit">Save with token</button>
+      </form>
+
+      <h2>Same write without token</h2>
+      <p class="muted">
+        Cookie still goes (you are logged in). No <code>X-CSRF-Token</code>.
+        The server should reject this — that is the defense working.
+      </p>
+      <div class="row">
+        <button type="button" id="without-token">Try POST /email without token</button>
+        <button type="button" id="logout">Log out</button>
+      </div>
+    </section>
+
+    <script src="/app.js"></script>
+  </body>
+</html>

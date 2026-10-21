@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>WebSocket inbox</title>
+    <style>
+      :root {
+        color-scheme: light;
+        font-family: ui-sans-serif, system-ui, sans-serif;
+      }
+      body {
+        max-width: 42rem;
+        margin: 2rem auto;
+        padding: 0 1rem;
+        line-height: 1.45;
+      }
+      h1 { font-size: 1.4rem; }
+      .muted { color: #555; font-size: 0.95rem; }
+      .stats {
+        display: flex;
+        gap: 1rem;
+        flex-wrap: wrap;
+        margin: 1rem 0;
+      }
+      .stat {
+        background: #f3f4f6;
+        padding: 0.6rem 0.8rem;
+        border-radius: 8px;
+      }
+      form { display: flex; gap: 0.5rem; margin: 1rem 0; }
+      input, button { font: inherit; padding: 0.45rem 0.6rem; }
+      input { flex: 1; }
+      ul { padding-left: 1.2rem; }
+      li { margin: 0.35rem 0; }
+      .open { color: #15803d; }
+      .closed { color: #b91c1c; }
+    </style>
+  </head>
+  <body>
+    <h1>WebSocket inbox</h1>
+    <p class="muted">
+      One HTTP upgrade, then frames both ways. Open this page in
+      <strong>two tabs</strong> — a send in one should appear in the other with no refresh.
+      A curl <code>POST /messages</code> broadcasts too.
+    </p>
+
+    <div class="stats">
+      <div class="stat">Status: <strong id="status" class="closed">connecting…</strong></div>
+      <div class="stat">Frames in: <strong id="frames">0</strong></div>
+      <div class="stat">Cursor: <strong id="cursor">—</strong></div>
+    </div>
+
+    <form id="form">
+      <input id="author" placeholder="Your name" value="Ada" />
+      <input id="text" placeholder="Write a message" required />
+      <button type="submit">Send on socket</button>
+    </form>
+
+    <h2>Messages</h2>
+    <ul id="list"></ul>
+
+    <script>
+      let lastId = "";
+      let frames = 0;
+      const seen = new Set();
+      const $ = (id) => document.getElementById(id);
+
+      function renderMessage(message) {
+        if (!message || seen.has(message.id)) return;
+        seen.add(message.id);
+        lastId = message.id;
+        $("cursor").textContent = lastId;
+        const li = document.createElement("li");
+        li.textContent = `${message.author}: ${message.text}  (#${message.id})`;
+        $("list").appendChild(li);
+      }
+
+      function connect() {
+        const protocol = location.protocol === "https:" ? "wss:" : "ws:";
+        const socket = new WebSocket(`${protocol}//${location.host}/ws`);
+
+        socket.addEventListener("open", () => {
+          $("status").textContent = "open";
+          $("status").className = "open";
+          socket.send(JSON.stringify({ type: "catchup", lastId }));
+        });
+
+        socket.addEventListener("message", (event) => {
+          frames += 1;
+          $("frames").textContent = String(frames);
+          const body = JSON.parse(event.data);
+
+          if (body.type === "snapshot") {
+            body.messages.forEach(renderMessage);
+            lastId = body.latestId || lastId;
+            $("cursor").textContent = lastId || "—";
+          }
+
+          if (body.type === "message") {
+            renderMessage(body.message);
+          }
+
+          if (body.type === "error") {
+            console.error(body.message);
+          }
+        });
+
+        socket.addEventListener("close", () => {
+          $("status").textContent = "closed — reconnecting";
+          $("status").className = "closed";
+          setTimeout(connect, 1000);
+        });
+
+        $("form").onsubmit = (event) => {
+          event.preventDefault();
+          socket.send(
+            JSON.stringify({
+              type: "send",
+              author: $("author").value,
+              text: $("text").value,
+            })
+          );
+          $("text").value = "";
+        };
+      }
+
+      connect();
+    </script>
+  </body>
+</html>

@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Short polling inbox</title>
+    <style>
+      :root {
+        color-scheme: light;
+        font-family: ui-sans-serif, system-ui, sans-serif;
+      }
+      body {
+        max-width: 42rem;
+        margin: 2rem auto;
+        padding: 0 1rem;
+        line-height: 1.45;
+      }
+      h1 { font-size: 1.4rem; }
+      .muted { color: #555; font-size: 0.95rem; }
+      .stats {
+        display: flex;
+        gap: 1rem;
+        flex-wrap: wrap;
+        margin: 1rem 0;
+      }
+      .stat {
+        background: #f3f4f6;
+        padding: 0.6rem 0.8rem;
+        border-radius: 8px;
+      }
+      form { display: flex; gap: 0.5rem; margin: 1rem 0; }
+      input, button { font: inherit; padding: 0.45rem 0.6rem; }
+      input { flex: 1; }
+      ul { padding-left: 1.2rem; }
+      li { margin: 0.35rem 0; }
+    </style>
+  </head>
+  <body>
+    <h1>Short polling inbox</h1>
+    <p class="muted">
+      The browser asks <code>GET /messages?after=…</code> on a timer.
+      The server answers <strong>immediately</strong> — usually with an empty list.
+      New messages appear on the <em>next tick</em>, not the instant they are posted.
+    </p>
+
+    <div class="stats">
+      <div class="stat">Polls: <strong id="polls">0</strong></div>
+      <div class="stat">Empty polls: <strong id="empty">0</strong></div>
+      <div class="stat">Interval: <strong id="interval">—</strong></div>
+      <div class="stat">Cursor: <strong id="cursor">—</strong></div>
+    </div>
+
+    <form id="form">
+      <input id="author" placeholder="Your name" value="Ada" />
+      <input id="text" placeholder="Write a message" required />
+      <button type="submit">Post</button>
+    </form>
+
+    <h2>Messages</h2>
+    <ul id="list"></ul>
+
+    <script>
+      let after = "";
+      let polls = 0;
+      let empty = 0;
+      let intervalMs = 2000;
+      const seen = new Set();
+
+      const $ = (id) => document.getElementById(id);
+
+      function renderMessage(message) {
+        if (seen.has(message.id)) return;
+        seen.add(message.id);
+        const li = document.createElement("li");
+        li.textContent = `${message.author}: ${message.text}  (#${message.id})`;
+        $("list").appendChild(li);
+      }
+
+      async function poll() {
+        polls += 1;
+        $("polls").textContent = String(polls);
+
+        const url = after ? `/messages?after=${encodeURIComponent(after)}` : "/messages";
+        const res = await fetch(url);
+        const body = await res.json();
+
+        if (!body.messages.length) {
+          empty += 1;
+          $("empty").textContent = String(empty);
+        }
+
+        body.messages.forEach(renderMessage);
+        after = body.latestId;
+        $("cursor").textContent = after || "—";
+      }
+
+      async function loop() {
+        try {
+          await poll();
+        } catch (error) {
+          console.error(error);
+        }
+        setTimeout(loop, intervalMs);
+      }
+
+      $("form").addEventListener("submit", async (event) => {
+        event.preventDefault();
+        await fetch("/messages", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            author: $("author").value,
+            text: $("text").value,
+          }),
+        });
+        $("text").value = "";
+      });
+
+      (async () => {
+        const meta = await fetch("/meta").then((r) => r.json());
+        intervalMs = meta.pollIntervalMs;
+        $("interval").textContent = `${intervalMs} ms`;
+        loop();
+      })();
+    </script>
+  </body>
+</html>
